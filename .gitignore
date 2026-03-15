@@ -1,0 +1,33 @@
+# Data & runtime
+data/
+library/
+
+# Environment (contains secrets)
+.env
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Python / Backend & Runner
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SSL certs (if stored locally)
+nginx/certs/*.pem
