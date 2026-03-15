@@ -40,6 +40,30 @@ Open `http://localhost` — log in as `admin` / `changeme` (or whatever you set)
 
 ---
 
+## Screenshots
+
+### Virtual Machines
+![Virtual Machines](docs/images/vms.png)
+The main VM management view. VMs are displayed as cards showing machine type, CPU, RAM, and current status. VMs can be organised into colour-coded groups with shared networking — the "Networked Group" above connects its members on a private LAN automatically. Start, stop, edit, or delete any VM with one click.
+
+### VM Console
+![VM Console](docs/images/running.png)
+A live Windows for Workgroups 3.11 session running inside the browser via noVNC. The toolbar provides media mounting, Ctrl+Alt+Del, pause, reset, and power-off controls. Multiple VMs can be open simultaneously in separate tabs, and real-time audio streams directly to the browser.
+
+### VM Configuration
+![VM Configuration](docs/images/settings.png)
+The VM editor gives full access to 86Box's hardware settings — machine/chipset, CPU family and speed, memory, display, sound, network, storage controllers, drives, and ports — all from a categorised sidebar without touching config files.
+
+### Media Library
+![Media Library](docs/images/media.png)
+A column-view file browser for managing disk images. The "My Images" tab holds per-user uploads; the "Library" tab provides a read-only shared collection (floppy images, driver disks, OS installers) available to all users. Select any image to see its type and size, then mount it to a VM.
+
+### Database Explorer
+![Database Explorer](docs/images/hardware.png)
+Browse the full 86Box hardware compatibility database. Navigate by category (machines, video cards, sound cards, network cards, controllers, drives) and bus type, then inspect any device's configuration options — IRQ, DMA, I/O addresses, and optional features — along with the list of compatible machines.
+
+---
+
 ## Quick Start (Detailed)
 
 ### Prerequisites
