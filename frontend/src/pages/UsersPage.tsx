@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2, Shield, User as UserIcon, CheckCircle, XCircle } from 'lucide-react'
 import { userApi, formatBytes } from '../lib/api'
@@ -42,7 +43,7 @@ function UserModal({ initial, onSave, onClose }: {
     }
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-md card p-6 shadow-xl">
         <h2 className="text-base font-semibold text-slate-900 dark:text-white mb-5">
@@ -107,7 +108,8 @@ function UserModal({ initial, onSave, onClose }: {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -216,7 +218,7 @@ export default function UsersPage() {
                     <button onClick={() => setEditUser(user)} className="btn-ghost p-1.5">
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
-                    {user.id !== currentUser?.id && (
+                    {user.id !== currentUser?.id && !user.is_bootstrap && (
                       <button
                         onClick={() => setDeleteConfirm(user)}
                         className="btn-ghost p-1.5 text-red-400 hover:text-red-600"

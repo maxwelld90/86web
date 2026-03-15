@@ -374,7 +374,10 @@ async def get_all_users_stats(
     """Admin: per-user summary for dashboard."""
     users = db.query(User).filter(User.is_active == True).all()
     result = []
+    is_bootstrap_user = current_user.username == settings.admin_username
     for u in users:
+        if u.username == settings.admin_username and not is_bootstrap_user:
+            continue
         vms = u.vms
         vm_usage = sum(dir_size(os.path.join(settings.vms_path, v.uuid)) for v in vms)
         disk_usage = (
