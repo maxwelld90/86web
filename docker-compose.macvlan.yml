@@ -1,0 +1,23 @@
+# =============================================================================
+# 86Web — macvlan override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.macvlan.yml up -d
+#
+# Prerequisites:
+#   docker network create -d macvlan \
+#     --subnet=192.168.46.0/24 \
+#     --gateway=192.168.46.1 \
+#     -o parent=eth0 \
+#     netpub
+# =============================================================================
+
+networks:
+  netpub:
+    external: true
+
+services:
+  web:
+    ports: []               # Remove port mapping — macvlan provides the IP
+    networks:
+      private: {}
+      netpub:
+        ipv4_address: 192.168.46.101

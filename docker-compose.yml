@@ -1,0 +1,143 @@
+# =============================================================================
+# 86Web — Docker Compose (default: bridge network, port-exposed)
+# For macvlan, use: docker compose -f docker-compose.yml -f docker-compose.macvlan.yml up
+# =============================================================================
+
+networks:
+  private:
+    driver: bridge
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Nginx — public-facing reverse proxy + static frontend
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_AUDIO_BUFFER_SECS=${AUDIO_BUFFER_SECS:-0.4}
+    container_name: 86web-nginx
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+      # Uncomment to enable HTTPS (also set SSL_CERTS_DIR in .env):
+      # - "${HTTPS_PORT:-443}:443"
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - SERVER_NAME=${SERVER_NAME:-_}
+      - CERTS_DIR=/etc/nginx/certs
+    networks:
+      - private
+    depends_on:
+      backend:
+        condition: service_healthy
+      runner:
+        condition: service_started
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/templates:/etc/nginx/86web-templates:ro
+      - ${SSL_CERTS_DIR:-./nginx/certs}:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI (API server, auth, DB, VM orchestration)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: 86web-backend
+    restart: unless-stopped
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:-changeme_secret}
+      - USER_MANAGEMENT=${USER_MANAGEMENT:-true}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
+      - LDAP_ENABLED=${LDAP_ENABLED:-false}
+      - LDAP_SERVER=${LDAP_SERVER:-}
+      - LDAP_PORT=${LDAP_PORT:-389}
+      - LDAP_BASE_DN=${LDAP_BASE_DN:-}
+      - LDAP_BIND_DN=${LDAP_BIND_DN:-}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
+      - LDAP_USER_FILTER=${LDAP_USER_FILTER:-(objectClass=person)}
+      - LDAP_GROUP_DN=${LDAP_GROUP_DN:-}
+      - LDAP_USERNAME_ATTR=${LDAP_USERNAME_ATTR:-uid}
+      - LDAP_EMAIL_ATTR=${LDAP_EMAIL_ATTR:-mail}
+      - LDAP_TLS=${LDAP_TLS:-false}
+      - RUNNER_URL=${RUNNER_URL:-http://runner:8001}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      - DEFAULT_MAX_VMS=${DEFAULT_MAX_VMS:-10}
+      - DEFAULT_MAX_STORAGE_GB=${DEFAULT_MAX_STORAGE_GB:-100}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    networks:
+      - private
+    volumes:
+      - ${DATA_PATH:-./data}:/data
+      - ${LIBRARY_PATH:-./library}:/library:ro
+    expose:
+      - "8000"
+    depends_on:
+      runner:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Runner — manages 86Box processes, VNC, auto-update of binary + ROMs
+  # ---------------------------------------------------------------------------
+  runner:
+    build:
+      context: ./runner
+      dockerfile: Dockerfile
+    container_name: 86web-runner
+    restart: unless-stopped
+    environment:
+      - BOX86_VERSION=${BOX86_VERSION:-}
+      - BOX86_ARCH=${BOX86_ARCH:-x86_64}
+      - BASE_VNC_PORT=${BASE_VNC_PORT:-5900}
+      - BASE_WS_PORT=${BASE_WS_PORT:-6900}
+      - MAX_CONCURRENT_VMS=${MAX_CONCURRENT_VMS:-50}
+      - VM_AUTO_SHUTDOWN_MINUTES=${VM_AUTO_SHUTDOWN_MINUTES:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    networks:
+      - private
+    volumes:
+      - ${DATA_PATH:-./data}:/data
+      - ${LIBRARY_PATH:-./library}:/library:ro
+    expose:
+      - "8001"
+      # VNC WebSocket ports (noVNC)
+      - "6900-6949"
+    # Allow access to display subsystem for Xvfb
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/net/tun:/dev/net/tun
+    shm_size: '256mb'
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

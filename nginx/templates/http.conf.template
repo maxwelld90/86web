@@ -1,0 +1,56 @@
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
+
+    # -----------------------------------------------------------------
+    # API proxy → backend FastAPI
+    # -----------------------------------------------------------------
+    location /api/ {
+        proxy_pass http://backend:8000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 86400;
+    }
+
+    # -----------------------------------------------------------------
+    # noVNC WebSocket proxy → runner
+    # -----------------------------------------------------------------
+    location ~ ^/vnc/[^/]+/websockify$ {
+        proxy_pass http://runner:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $http_host;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    # -----------------------------------------------------------------
+    # Audio stream proxy → runner
+    # -----------------------------------------------------------------
+    location ~ ^/vms/[^/]+/audio$ {
+        proxy_pass http://runner:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400;
+    }
+
+    # -----------------------------------------------------------------
+    # SPA fallback
+    # -----------------------------------------------------------------
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
