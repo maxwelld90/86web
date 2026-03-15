@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .config import get_settings
 from .database import engine, Base, SessionLocal
@@ -139,6 +140,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
 app.include_router(auth.router)
 app.include_router(vms.router)
