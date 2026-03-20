@@ -62,6 +62,17 @@ export const vmApi = {
 
   get: (id: number) => request<VM>(`/vms/${id}`),
 
+  // NEW: Fetches the list of VM folders that exist in vms/ but are not yet registered in the database
+  getUnregistered: () => 
+    request<{ unregistered: { folder_name: string; machine: string }[] }>('/vms/unregistered'),
+
+  // NEW: Sends the command to import one of these discovered folders as a new VM
+  importVM: (data: { folder_name: string; vm_name: string; description?: string; group_id?: number | null }) =>
+    request<{ status: string; vm: { id: number; uuid: string } }>('/vms/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   create: (data: { name: string; description?: string; group_id?: number; config: VMConfig }) =>
     request<VM>('/vms', { method: 'POST', body: JSON.stringify(data) }),
 
