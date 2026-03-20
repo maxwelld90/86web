@@ -530,6 +530,12 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
         if isinstance(v, float) and v == int(v):
             return str(int(v))
         return str(v)
+    def _resolve_media(fn: str) -> str:
+        if not fn:
+            return ""
+        if os.path.isabs(fn):
+            return fn
+        return os.path.join(vm_dir, fn)
 
     # ── [Machine] ──────────────────────────────────────────────────────────────
     section("Machine")
@@ -685,7 +691,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             opt(f"fdd_{n}_check_bpb", 0)
         fn = cfg.get(f"fdd_{n}_fn", "")
         if fn and ftype != "none":
-            opt(f"fdd_{n}_fn", fn)
+            opt(f"fdd_{n}_fn", _resolve_media(fn))
 
     # CD-ROM drives 01-04
     _default_cdrom_channels = {1: "1:0", 2: "1:1", 3: "2:0", 4: "2:1"}
@@ -706,7 +712,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
                 opt(f"cdrom_{n}_ide_channel", channel)
             fn = cfg.get(f"cdrom_{n}_fn", "")
             if fn:
-                opt(f"cdrom_{n}_image_path", fn)
+                opt(f"cdrom_{n}_image_path", _resolve_media(fn))
 
     # ── [Ports (COM & LPT)] ───────────────────────────────────────────────────
     section("Ports (COM & LPT)")
