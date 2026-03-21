@@ -243,7 +243,8 @@ async def refresh_hardware_lists(current_user: User = Depends(require_admin)):
     from ..services.machine_db import refresh_hardware_json
 
     config_dir = Path(settings.data_path) / "config"
-    result = await refresh_hardware_json(config_dir, force=True)
+    cache_dir = Path(settings.data_path) / "cache"
+    result = await refresh_hardware_json(config_dir, cache_dir=cache_dir, force=True)
     if not result:
         raise HTTPException(500, "Hardware database refresh failed — check server logs.")
     # Reload the hardware lists module so the new data is used immediately
