@@ -440,7 +440,14 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
 export default function VMsPage() {
   const qc = useQueryClient()
   const { addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
-  const [view, setView] = useState<ViewMode>('grid')
+  const [view, setView] = useState<ViewMode>(() => {
+    const savedMode = localStorage.getItem('vmViewPreference');
+    return (savedMode === 'grid' || savedMode === 'list') ? savedMode : 'grid';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('vmViewPreference', view);
+  }, [view]);
   const [showCreateVM, setShowCreateVM] = useState(false)
   const [showImportVM, setShowImportVM] = useState(false)
   const [editVM, setEditVM] = useState<VM | null>(null)
