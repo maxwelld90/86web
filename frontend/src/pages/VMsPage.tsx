@@ -3,13 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Play, Square, RotateCcw, Pencil, Trash2, Monitor, Loader2,
   FolderPlus, ChevronDown, ChevronRight, LayoutGrid, List,
-  HardDrive, Eye, Network, Settings2, CloudOff,
+  HardDrive, Eye, Network, Settings2, CloudOff, FolderDown
 } from 'lucide-react'
 import { vmApi, systemApi, formatBytes } from '../lib/api'
 import { VM, VMConfig, VMGroup } from '../types'
 import { useStore } from '../store/useStore'
 import VMConfigModal from '../components/VMConfigModal'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ImportVMModal from '../components/ImportVMModal'
 import { clsx } from 'clsx'
 
 type ViewMode = 'grid' | 'list'
@@ -404,6 +405,7 @@ export default function VMsPage() {
   const { addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
   const [view, setView] = useState<ViewMode>('grid')
   const [showCreateVM, setShowCreateVM] = useState(false)
+  const [showImportVM, setShowImportVM] = useState(false)
   const [editVM, setEditVM] = useState<VM | null>(null)
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [editGroup, setEditGroup] = useState<VMGroup | null>(null)
@@ -550,6 +552,17 @@ export default function VMsPage() {
           </button>
           <button
             disabled={!serverOnline}
+            onClick={() => atVMQuota ? addToast(`VM quota reached (${userStats!.max_vms} VMs). Delete a VM to import a new one.`, 'error') : setShowImportVM(true)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg text-white bg-amber-500 hover:bg-amber-600 shadow-sm transition-colors', 
+              (atVMQuota || !serverOnline) && 'opacity-60 cursor-not-allowed'
+            )}
+            title={!serverOnline ? 'Server unavailable' : atVMQuota ? `Quota reached: ${userStats?.max_vms} VMs` : undefined}
+          >
+            <FolderDown className="w-4 h-4" />Import VM
+          </button>
+          <button
+            disabled={!serverOnline}
             onClick={() => atVMQuota ? addToast(`VM quota reached (${userStats!.max_vms} VMs). Delete a VM to create a new one.`, 'error') : setShowCreateVM(true)}
             className={clsx('btn-primary', (atVMQuota || !serverOnline) && 'opacity-60')}
             title={!serverOnline ? 'Server unavailable' : atVMQuota ? `Quota reached: ${userStats?.max_vms} VMs` : undefined}
@@ -644,6 +657,19 @@ export default function VMsPage() {
           onClose={() => setShowCreateVM(false)}
           onSave={async (name, desc, groupId, config) => {
             await createVMMut.mutateAsync({ name, description: desc, group_id: groupId ?? undefined, config })
+          }}
+        />
+      )}
+
+      {/* Import VM modal */}
+      {showImportVM && (
+        <ImportVMModal
+          groups={groups}
+          onClose={() => setShowImportVM(false)}
+          onSuccess={(vmId) => {
+             // Invalidate the cache to reload the VM list automatically
+             qc.invalidateQueries({ queryKey: ['vms'] })
+             addToast('VM successfully imported!', 'success')
           }}
         />
       )}
