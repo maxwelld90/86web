@@ -588,16 +588,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
     config_override: optional key/value pairs merged into cfg at write time
     (not persisted to DB). Used e.g. to inject PCap transport for group networking.
     """
-    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video, get_cdrom_drive_types
-    _cdrom_drive_list = get_cdrom_drive_types()
-    def _cdrom_type_index(internal_name: str) -> int | None:
-        """Map a cdrom_drive_type internal_name to its numeric 86Box index."""
-        if not internal_name:
-            return None
-        for idx, d in enumerate(_cdrom_drive_list):
-            if d.get("internal_name") == internal_name:
-                return idx
-        return None
+    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video
 
     cfg = dict(vm.config or {})
     if config_override:
@@ -790,9 +781,9 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             speed = cfg.get(f"cdrom_{n}_speed", 24)
             if speed != 24:
                 opt(f"cdrom_{n}_speed", speed)
-            drive_type_idx = _cdrom_type_index(cfg.get(f"cdrom_{n}_drive_type", ""))
-            if drive_type_idx is not None:
-                opt(f"cdrom_{n}_type", drive_type_idx)
+            drive_type = cfg.get(f"cdrom_{n}_drive_type", "")
+            if drive_type:
+                opt(f"cdrom_{n}_type", drive_type)
             if bus_str == "atapi":
                 channel = cfg.get(f"cdrom_{n}_ide_channel") or _default_cdrom_channels[i]
                 opt(f"cdrom_{n}_ide_channel", channel)
