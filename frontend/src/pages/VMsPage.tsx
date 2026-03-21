@@ -17,13 +17,17 @@ type ViewMode = 'grid' | 'list'
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20',
-    stopped: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800',
-    starting: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
+    paused: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
+    starting: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20',
+    stopped: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
     error: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
   }
+  
+  const isAnimated = status === 'running' || status === 'paused' || status === 'starting'
+
   return (
     <span className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium', map[status] || map.stopped)}>
-      <span className={`status-${status} w-1.5 h-1.5`} />
+      <span className={clsx('w-1.5 h-1.5 rounded-full bg-current', isAnimated && 'animate-pulse')} />
       {status}
     </span>
   )
@@ -70,12 +74,24 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
 
   const borderStyle = groupColor ? { borderTopColor: groupColor, borderTopWidth: 3 } : {}
 
+  const iconBgClass = !serverOnline ? 'bg-slate-100 dark:bg-slate-800'
+    : vm.status === 'running' ? 'bg-emerald-100 dark:bg-emerald-900/30'
+    : vm.status === 'paused' ? 'bg-amber-100 dark:bg-amber-900/30'
+    : vm.status === 'starting' ? 'bg-blue-100 dark:bg-blue-900/30'
+    : 'bg-red-100 dark:bg-red-900/30'
+
+  const iconTextClass = !serverOnline ? 'text-slate-400'
+    : vm.status === 'running' ? 'text-emerald-600 dark:text-emerald-400'
+    : vm.status === 'paused' ? 'text-amber-600 dark:text-amber-400'
+    : vm.status === 'starting' ? 'text-blue-600 dark:text-blue-400'
+    : 'text-red-600 dark:text-red-400'
+
   return (
     <div className="card-hover p-5 flex flex-col gap-4" style={borderStyle}>
       {/* Header */}
       <div className="flex items-start gap-3">
-        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', isRunning ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-800')}>
-          <Monitor className={clsx('w-4.5 h-4.5', isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400')} />
+        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', iconBgClass)}>
+          <Monitor className={clsx('w-4.5 h-4.5', iconTextClass)} />
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-slate-900 dark:text-white text-sm truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</h3>
@@ -115,7 +131,12 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
             <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className="btn-primary flex-1 justify-center text-xs py-1.5">
               <Monitor className="w-3.5 h-3.5" />Console
             </button>
-            <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary p-2" title="Stop">
+            <button 
+              onClick={() => stopMut.mutate()} 
+              disabled={stopMut.isPending} 
+              className="btn-secondary p-2 hover:!bg-red-100 hover:!text-red-600 hover:!border-red-200 dark:hover:!bg-red-900/30 dark:hover:!text-red-400 dark:hover:!border-red-800 transition-colors" 
+              title="Stop"
+            >
               <Square className="w-3.5 h-3.5" />
             </button>
             <button onClick={onEdit} className="btn-ghost p-2" title="View settings (read-only while running)">
@@ -185,13 +206,25 @@ function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () =>
 
   const rowStyle = groupColor ? { borderLeft: `3px solid ${groupColor}` } : {}
 
+  const iconBgClass = !serverOnline ? 'bg-slate-100 dark:bg-slate-800'
+    : vm.status === 'running' ? 'bg-emerald-100 dark:bg-emerald-900/30'
+    : vm.status === 'paused' ? 'bg-amber-100 dark:bg-amber-900/30'
+    : vm.status === 'starting' ? 'bg-blue-100 dark:bg-blue-900/30'
+    : 'bg-red-100 dark:bg-red-900/30'
+
+  const iconTextClass = !serverOnline ? 'text-slate-400'
+    : vm.status === 'running' ? 'text-emerald-600 dark:text-emerald-400'
+    : vm.status === 'paused' ? 'text-amber-600 dark:text-amber-400'
+    : vm.status === 'starting' ? 'text-blue-600 dark:text-blue-400'
+    : 'text-red-600 dark:text-red-400'
+
   return (
     <>
     <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors" style={rowStyle}>
       <td className="px-5 py-3">
         <div className="flex items-center gap-3">
-          <div className={clsx('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0', isRunning ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-800')}>
-            <Monitor className={clsx('w-3.5 h-3.5', isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400')} />
+          <div className={clsx('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0', iconBgClass)}>
+            <Monitor className={clsx('w-3.5 h-3.5', iconTextClass)} />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</p>
@@ -211,7 +244,11 @@ function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () =>
               <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className="btn-primary text-xs py-1 px-2.5">
                 <Monitor className="w-3 h-3" />Console
               </button>
-              <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary text-xs py-1 px-2 disabled:opacity-60">
+              <button 
+                onClick={() => stopMut.mutate()} 
+                disabled={stopMut.isPending} 
+                className="btn-secondary text-xs py-1 px-2 disabled:opacity-60 hover:!bg-red-100 hover:!text-red-600 hover:!border-red-200 dark:hover:!bg-red-900/30 dark:hover:!text-red-400 dark:hover:!border-red-800 transition-colors"
+              >
                 {stopMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
               </button>
               <button onClick={onEdit} className="btn-ghost p-1.5" title="View settings (read-only while running)">
