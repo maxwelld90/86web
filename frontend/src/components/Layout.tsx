@@ -17,14 +17,28 @@ import { clsx } from 'clsx'
 
 function StatusDot({ status }: { status: string }) {
   const { serverOnline } = useStore()
+
   const effective = serverOnline ? status : 'stopped'
-  const cls = {
-    running: 'status-running',
-    stopped: 'status-stopped',
-    starting: 'status-starting',
-    error: 'status-error',
-  }[effective] || 'status-stopped'
-  return <span className={cls} />
+  
+  const colorClass = {
+    running: 'bg-emerald-500 dark:bg-emerald-400',
+    paused: 'bg-amber-500 dark:bg-amber-400',
+    starting: 'bg-blue-500 dark:bg-blue-400',
+    stopped: 'bg-red-500 dark:bg-red-400',
+    error: 'bg-red-500 dark:bg-red-400',
+  }[effective] || 'bg-slate-400 dark:bg-slate-500'
+
+  const isAnimated = effective === 'running' || effective === 'paused' || effective === 'starting'
+
+  return (
+    <span 
+      className={clsx(
+        colorClass,
+        isAnimated && 'animate-pulse',
+        'w-2 h-2 rounded-full inline-block flex-shrink-0'
+      )} 
+    />
+  )
 }
 
 function useHashRouting() {
