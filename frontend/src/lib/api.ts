@@ -1,9 +1,16 @@
 import { VM, VMConfig, VMGroup, User, SystemStats, UserStats, VersionInfo, HardwareLists, AuthConfig } from '../types'
+import { useStore } from '../store/useStore'
 
 const BASE = '/api'
 
 function getToken(): string | null {
   return localStorage.getItem('86web_token')
+}
+
+function handleSessionExpiry() {
+  if (getToken()) {
+    useStore.getState().expireSession()
+  }
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -17,12 +24,9 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...opts, headers })
 
   if (res.status === 401) {
-    // Only force-redirect on session expiry (had a token). A 401 with no token
-    // means wrong credentials on the login form — let the caller handle it.
-    if (getToken()) {
-      localStorage.removeItem('86web_token')
-      window.location.href = '/login'
-    }
+    // Only expire session if we had a token (session expiry). A 401 with no
+    // token means wrong credentials on the login form — let the caller handle it.
+    handleSessionExpiry()
     const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }))
     throw new Error(err.detail || 'Invalid credentials')
   }
@@ -143,6 +147,10 @@ export const sharedMediaApi = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
     })
+    if (res.status === 401) {
+      handleSessionExpiry()
+      throw new Error('Not authenticated')
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
       throw new Error(err.detail || `HTTP ${res.status}`)
@@ -172,7 +180,10 @@ export const mediaApi = {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
       }
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status === 401) {
+          handleSessionExpiry()
+          reject(new Error('Not authenticated'))
+        } else if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText))
         } else {
           const detail = JSON.parse(xhr.responseText || '{}').detail || `HTTP ${xhr.status}`
@@ -227,7 +238,10 @@ export const libraryApi = {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
       }
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status === 401) {
+          handleSessionExpiry()
+          reject(new Error('Not authenticated'))
+        } else if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText))
         } else {
           const detail = JSON.parse(xhr.responseText || '{}').detail || `HTTP ${xhr.status}`

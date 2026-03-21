@@ -123,7 +123,7 @@ function CloseIcon() {
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const { setToken, setCurrentUser, authConfig } = useStore()
+  const { setToken, setCurrentUser, authConfig, sessionExpired } = useStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -276,6 +276,25 @@ export default function LoginPage() {
               marginBottom: 14,
             }}
           />
+
+          {/* Session expired banner */}
+          {sessionExpired && !error && (
+              <div
+                style={{
+                  ...W98_FONT,
+                  ...W98_SUNKEN,
+                  background: '#ffffcc',
+                  color: '#444',
+                  padding: '4px 8px',
+                  marginBottom: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                Your session has expired. Please sign in again.
+              </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleSubmit}>

@@ -14,10 +14,12 @@ interface AppStore {
   token: string | null
   currentUser: User | null
   authConfig: AuthConfig | null
+  sessionExpired: boolean
   setToken: (token: string | null) => void
   setCurrentUser: (user: User | null) => void
   setAuthConfig: (config: AuthConfig) => void
   logout: () => void
+  expireSession: () => void
 
   // Theme
   theme: 'light' | 'dark'
@@ -54,9 +56,10 @@ export const useStore = create<AppStore>()(
       token: null,
       currentUser: null,
       authConfig: null,
+      sessionExpired: false,
 
       setToken: (token) => {
-        set({ token })
+        set({ token, sessionExpired: false })
         if (token) {
           localStorage.setItem('86web_token', token)
         } else {
@@ -70,6 +73,11 @@ export const useStore = create<AppStore>()(
       logout: () => {
         localStorage.removeItem('86web_token')
         set({ token: null, currentUser: null, openTabs: [], activeTab: 'dashboard' })
+      },
+
+      expireSession: () => {
+        localStorage.removeItem('86web_token')
+        set({ token: null, currentUser: null, openTabs: [], activeTab: 'dashboard', sessionExpired: true })
       },
 
       theme: 'dark',
