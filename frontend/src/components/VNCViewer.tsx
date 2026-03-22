@@ -7,6 +7,7 @@ import { VMConfig } from '../types'
 import VMConfigModal from './VMConfigModal'
 import ImagePickerModal from './ImagePickerModal'
 import ConfirmDialog from './ConfirmDialog'
+import { clsx } from 'clsx'
 
 interface Props {
   vmId: number
@@ -19,6 +20,7 @@ export default function VNCViewer({ vmId, vmName }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<any>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const keyboardInputRef = useRef<HTMLTextAreaElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [muted, setMuted] = useState(true)  // start muted so autoplay is allowed
@@ -35,6 +37,57 @@ export default function VNCViewer({ vmId, vmName }: Props) {
   // 86Box starts in fullscreen with its UI (menu+status bar) hidden.
   // This tracks whether the user has toggled it back on.
   const [uiVisible, setUiVisible] = useState(false)
+  const [keyboardActive, setKeyboardActive] = useState(false)
+
+  const handleHiddenInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value
+    if (!val || !rfbRef.current) return
+    
+    for (const char of val) {
+      const code = char.charCodeAt(0)
+      rfbRef.current.sendKey(code, char, true)
+      rfbRef.current.sendKey(code, char, false)
+    }
+    e.target.value = ''
+  }
+
+  const handleHiddenKeyDown = (e: React.KeyboardEvent) => {
+    if (!rfbRef.current) return
+    
+    const keyMap: Record<string, number> = {
+      'Backspace': 0xff08,
+      'Enter': 0xff0d,
+      'Tab': 0xff09,
+      'Escape': 0xff1b,
+      'ArrowUp': 0xff52,
+      'ArrowDown': 0xff54,
+      'ArrowLeft': 0xff51,
+      'ArrowRight': 0xff53,
+    }
+
+    if (keyMap[e.key]) {
+      rfbRef.current.sendKey(keyMap[e.key], e.key, true)
+      rfbRef.current.sendKey(keyMap[e.key], e.key, false)
+      e.preventDefault()
+    }
+  }
+
+  const toggleKeyboard = () => {
+    if (keyboardActive) {
+      keyboardInputRef.current?.blur()
+    } else {
+      keyboardInputRef.current?.focus()
+    }
+  }
+
+  const sendSpecialKey = (keysym: number, name: string) => {
+    if (rfbRef.current) {
+      rfbRef.current.sendKey(keysym, name, true)
+      setTimeout(() => {
+        rfbRef.current?.sendKey(keysym, name, false)
+      }, 50) // Short delay so that the VM registers the input
+    }
+  }
 
   // 86Box keybindings — locked to defaults in 86box_global.cfg at runner startup.
   const KEY_TOGGLE_UI  = 'ctrl+alt+Next'   // Ctrl+Alt+PgDown — Toggle UI in fullscreen
@@ -461,6 +514,23 @@ export default function VNCViewer({ vmId, vmName }: Props) {
             </button>
           )}
 
+          {/* Virtual Keyboard Toggle for Mobile / Tablets */}
+          {isRunning && serverOnline && (
+            <button
+              onClick={toggleKeyboard}
+              onMouseDown={(e) => e.preventDefault()}
+              title="Toggle virtual keyboard"
+              className={clsx(
+                "btn-ghost text-xs transition-colors",
+                keyboardActive 
+                  ? "text-blue-500 bg-blue-50 dark:bg-blue-900/30" 
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {/* Toggle 86Box UI (menu + status bar) — only when running */}
           {isRunning && serverOnline && (
             <button
@@ -580,6 +650,45 @@ export default function VNCViewer({ vmId, vmName }: Props) {
       <div className="flex-1 relative bg-black">
         <div ref={canvasRef} className={`absolute inset-0 ${scaleToFit ? 'overflow-hidden' : 'overflow-auto'}`} />
 
+        {keyboardActive && isRunning && (
+          <div 
+            className="absolute top-2 right-2 flex flex-col gap-1.5 p-2 bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-xl z-50 shadow-2xl"
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            {/* Upper Bar: F1-F12 */}
+            <div className="flex justify-end gap-1.5">
+              {[1,2,3,4,5,6,7,8,9,10,11,12].map(num => (
+                <button 
+                  key={num} 
+                  onClick={() => sendSpecialKey(0xffbe + num - 1, `F${num}`)} 
+                  className="px-2 py-1 bg-slate-700 text-white rounded text-[10px] hover:bg-slate-600 transition-colors"
+                >
+                  F{num}
+                </button>
+              ))}
+            </div>
+
+            <div className="w-full h-px bg-slate-700 my-0.5" />
+
+            {/* Lower Bar: Special Keys and Arrow Keys */}
+            <div className="flex justify-end gap-1.5">
+              <button onClick={() => sendSpecialKey(0xff1b, 'Escape')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 transition-colors">ESC</button>
+              <button onClick={() => sendSpecialKey(0xff09, 'Tab')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 transition-colors">TAB</button>
+              <button onClick={() => sendSpecialKey(0xffe3, 'Control')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 transition-colors">CTRL</button>
+              <button onClick={() => sendSpecialKey(0xffeb, 'Meta')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 transition-colors">WIN</button>
+              <button onClick={() => sendSpecialKey(0xffe9, 'Alt')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 transition-colors">ALT</button>
+              <button onClick={() => sendSpecialKey(0xffff, 'Delete')} className="px-2 py-1 bg-red-900/60 text-white rounded text-[10px] font-bold hover:bg-red-800 transition-colors">DEL</button>
+              
+              <div className="w-px h-5 bg-slate-700 mx-1 self-center" />
+              
+              <button onClick={() => sendSpecialKey(0xff51, 'ArrowLeft')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] hover:bg-slate-700 transition-colors">◀</button>
+              <button onClick={() => sendSpecialKey(0xff52, 'ArrowUp')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] hover:bg-slate-700 transition-colors">▲</button>
+              <button onClick={() => sendSpecialKey(0xff54, 'ArrowDown')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] hover:bg-slate-700 transition-colors">▼</button>
+              <button onClick={() => sendSpecialKey(0xff53, 'ArrowRight')} className="px-2 py-1 bg-slate-800 text-white rounded text-[10px] hover:bg-slate-700 transition-colors">▶</button>
+            </div>
+          </div>
+        )}
+
         {loading && isRunning && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-slate-300">
             <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
@@ -684,6 +793,21 @@ export default function VNCViewer({ vmId, vmName }: Props) {
           }}
         />
       )}
+
+      {/* Hidden textarea with enhanced event listeners */}
+      <textarea
+        ref={keyboardInputRef}
+        className="absolute opacity-0 p-0 w-0 h-0 pointer-events-none"
+        style={{ top: '-100px', left: '-100px' }}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        onFocus={() => setKeyboardActive(true)}
+        onBlur={() => setKeyboardActive(false)}
+        onChange={handleHiddenInput}
+        onKeyDown={handleHiddenKeyDown}
+      />
+
     </div>
   )
 }
