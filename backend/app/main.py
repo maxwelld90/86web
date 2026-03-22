@@ -103,7 +103,7 @@ async def _refresh_hardware_db():
     else:
         log.info("Hardware database not in config — will download and generate now.")
 
-    result = await refresh_hardware_json(config_dir, cache_dir)
+    result = await refresh_hardware_json(config_dir, cache_dir=cache_dir)
     if result:
         log.info("Hardware database ready: %s", result)
     else:

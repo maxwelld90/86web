@@ -2,6 +2,8 @@ import logging
 import os
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+import uuid
+from .import_vms import VMImportRequest, scan_for_unregistered_folders, parse_86box_cfg
 
 log = logging.getLogger("86web")
 from sqlalchemy.orm import Session
@@ -254,6 +256,90 @@ async def create_vm(
 
     return _vm_to_response(vm)
 
+@router.get("/unregistered")
+async def get_unregistered_vms(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retrieves all folders in the vms directory that are not yet registered in the database."""
+    db_uuids = {vm.uuid for vm in db.query(VM).all()}
+    unregistered = scan_for_unregistered_folders(settings.vms_path, db_uuids)
+    return {"unregistered": unregistered}
+
+# ─── Import VMs ──────────────────────────────────────────────────────────────
+
+@router.post("/import")
+async def import_vm(
+    body: VMImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Parses an existing 86box.cfg, writes it to the database, and assigns a UUID."""
+    source_path = os.path.join(settings.vms_path, body.folder_name)
+    cfg_path = os.path.join(source_path, "86box.cfg")
+    
+    if not os.path.isdir(source_path) or not os.path.exists(cfg_path):
+        raise HTTPException(404, "Folder or 86box.cfg not found")
+        
+    new_uuid = str(uuid.uuid4())
+    target_path = os.path.join(settings.vms_path, new_uuid)
+    
+    # Delegate the parsing logic
+    parsed_config = parse_86box_cfg(cfg_path)
+    
+    # --- NEW: Translate raw CPU Hz into the correct UI index ---
+    from ..hardware_lists import get_cpu_by_index
+    cpu_family = parsed_config.get("cpu_family", "8088")
+    raw_speed = parsed_config.pop("_raw_cpu_speed", 0)
+    speed_index = 0
+    if raw_speed > 0:
+        for i in range(50):  # Brute force check up to 50 speed steps
+            try:
+                rspeed, _ = get_cpu_by_index(cpu_family, i)
+                if rspeed == raw_speed:
+                    speed_index = i
+                    break
+            except Exception:
+                break  # Index out of bounds, stop searching
+    parsed_config["cpu_speed"] = speed_index
+    
+    # Rename the folder from whatever the user named it to the proper UUID
+    try:
+        os.rename(source_path, target_path)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to rename folder: {e}")
+        
+    # --- NEW: Move hard disks into 86web's strict folder structure ---
+    os.makedirs(os.path.join(target_path, "hdd"), exist_ok=True)
+    for i in range(1, 9):
+        n = f"{i:02d}"
+        orig_fn = parsed_config.pop(f"_hdd_{n}_fn_orig", None)
+        if orig_fn and parsed_config.get(f"hdd_{n}_enabled"):
+            old_file = orig_fn if os.path.isabs(orig_fn) else os.path.join(target_path, orig_fn)
+            new_file = os.path.join(target_path, "hdd", f"hdd{i}.img")
+            if os.path.exists(old_file) and old_file != new_file:
+                try:
+                    shutil.move(old_file, new_file)
+                except Exception as e:
+                    log.warning(f"Failed to move HDD {old_file} to {new_file}: {e}")
+
+    # Write the new entry into the database
+    new_vm = VM(
+        name=body.vm_name,
+        description=body.description,
+        uuid=new_uuid,
+        config=parsed_config,
+        user_id=current_user.id,
+        group_id=body.group_id
+    )
+    db.add(new_vm)
+    db.commit()
+    db.refresh(new_vm)
+    
+    # Trigger a clean write to ensure the config format perfectly matches 86web's standard
+    _write_86box_config(new_vm, target_path)
+    
+    return {"status": "imported", "vm": {"id": new_vm.id, "uuid": new_vm.uuid}}
 
 @router.get("/{vm_id}", response_model=VMResponse)
 async def get_vm(
@@ -581,16 +667,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
     config_override: optional key/value pairs merged into cfg at write time
     (not persisted to DB). Used e.g. to inject PCap transport for group networking.
     """
-    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video, get_cdrom_drive_types
-    _cdrom_drive_list = get_cdrom_drive_types()
-    def _cdrom_type_index(internal_name: str) -> int | None:
-        """Map a cdrom_drive_type internal_name to its numeric 86Box index."""
-        if not internal_name:
-            return None
-        for idx, d in enumerate(_cdrom_drive_list):
-            if d.get("internal_name") == internal_name:
-                return idx
-        return None
+    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video
 
     cfg = dict(vm.config or {})
     if config_override:
@@ -609,6 +686,12 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
         if isinstance(v, float) and v == int(v):
             return str(int(v))
         return str(v)
+    def _resolve_media(fn: str) -> str:
+        if not fn:
+            return ""
+        if os.path.isabs(fn):
+            return fn
+        return os.path.join(vm_dir, fn)
 
     # ── [Machine] ──────────────────────────────────────────────────────────────
     section("Machine")
@@ -764,7 +847,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             opt(f"fdd_{n}_check_bpb", 0)
         fn = cfg.get(f"fdd_{n}_fn", "")
         if fn and ftype != "none":
-            opt(f"fdd_{n}_fn", fn)
+            opt(f"fdd_{n}_fn", _resolve_media(fn))
 
     # CD-ROM drives 01-04
     _default_cdrom_channels = {1: "1:0", 2: "1:1", 3: "2:0", 4: "2:1"}
@@ -777,15 +860,15 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             speed = cfg.get(f"cdrom_{n}_speed", 24)
             if speed != 24:
                 opt(f"cdrom_{n}_speed", speed)
-            drive_type_idx = _cdrom_type_index(cfg.get(f"cdrom_{n}_drive_type", ""))
-            if drive_type_idx is not None:
-                opt(f"cdrom_{n}_type", drive_type_idx)
+            drive_type = cfg.get(f"cdrom_{n}_drive_type", "")
+            if drive_type:
+                opt(f"cdrom_{n}_type", drive_type)
             if bus_str == "atapi":
                 channel = cfg.get(f"cdrom_{n}_ide_channel") or _default_cdrom_channels[i]
                 opt(f"cdrom_{n}_ide_channel", channel)
             fn = cfg.get(f"cdrom_{n}_fn", "")
             if fn:
-                opt(f"cdrom_{n}_image_path", fn)
+                opt(f"cdrom_{n}_image_path", _resolve_media(fn))
 
     # ── [Ports (COM & LPT)] ───────────────────────────────────────────────────
     section("Ports (COM & LPT)")
@@ -899,7 +982,6 @@ async def delete_media(
     if not os.path.exists(fp):
         raise HTTPException(404, "File not found")
     os.remove(fp)
-
 
 # ─── Drive Management (mount / eject / blank floppy) ─────────────────────────
 

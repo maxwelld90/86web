@@ -3,13 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Play, Square, RotateCcw, Pencil, Trash2, Monitor, Loader2,
   FolderPlus, ChevronDown, ChevronRight, LayoutGrid, List,
-  HardDrive, Eye, Network, Settings2, CloudOff, Users, ArrowUp, ArrowDown
+HardDrive, Eye, Network, Settings2, CloudOff, Users, ArrowUp, ArrowDown, FolderDown
 } from 'lucide-react'
 import { vmApi, systemApi, formatBytes, userApi } from '../lib/api'
 import { VM, VMConfig, VMGroup } from '../types'
 import { useStore } from '../store/useStore'
 import VMConfigModal from '../components/VMConfigModal'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ImportVMModal from '../components/ImportVMModal'
 import { clsx } from 'clsx'
 import { X } from 'lucide-react'
 
@@ -18,13 +19,17 @@ type ViewMode = 'grid' | 'list'
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20',
-    stopped: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800',
-    starting: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
+    paused: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
+    starting: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20',
+    stopped: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
     error: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
   }
+  
+  const isAnimated = status === 'running' || status === 'paused' || status === 'starting'
+
   return (
     <span className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium', map[status] || map.stopped)}>
-      <span className={`status-${status} w-1.5 h-1.5`} />
+      <span className={clsx('w-1.5 h-1.5 rounded-full bg-current', isAnimated && 'animate-pulse')} />
       {status}
     </span>
   )
@@ -111,12 +116,24 @@ function VMCard({ vm, parentGroup, onEdit, groupColor, cpuSpeeds, onStartError }
 
   const borderStyle = groupColor ? { borderTopColor: groupColor, borderTopWidth: 3 } : {}
 
+  const iconBgClass = !serverOnline ? 'bg-slate-100 dark:bg-slate-800'
+    : vm.status === 'running' ? 'bg-emerald-100 dark:bg-emerald-900/30'
+    : vm.status === 'paused' ? 'bg-amber-100 dark:bg-amber-900/30'
+    : vm.status === 'starting' ? 'bg-blue-100 dark:bg-blue-900/30'
+    : 'bg-red-100 dark:bg-red-900/30'
+
+  const iconTextClass = !serverOnline ? 'text-slate-400'
+    : vm.status === 'running' ? 'text-emerald-600 dark:text-emerald-400'
+    : vm.status === 'paused' ? 'text-amber-600 dark:text-amber-400'
+    : vm.status === 'starting' ? 'text-blue-600 dark:text-blue-400'
+    : 'text-red-600 dark:text-red-400'
+
   return (
     <div className="card-hover p-5 flex flex-col gap-4" style={borderStyle}>
       {/* Header */}
       <div className="flex items-start gap-3">
-        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', isRunning ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-800')}>
-          <Monitor className={clsx('w-4.5 h-4.5', isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400')} />
+        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', iconBgClass)}>
+          <Monitor className={clsx('w-4.5 h-4.5', iconTextClass)} />
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-slate-900 dark:text-white text-sm truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</h3>
@@ -164,7 +181,12 @@ function VMCard({ vm, parentGroup, onEdit, groupColor, cpuSpeeds, onStartError }
               <Monitor className="w-3.5 h-3.5" />
               {isLockedByOther ? `Console (🔒 ${vm.locked_by_username})` : 'Console'}
             </button>
-            <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary p-2" title="Stop">
+            <button 
+              onClick={() => stopMut.mutate()} 
+              disabled={stopMut.isPending} 
+              className="btn-secondary p-2 hover:!bg-red-100 hover:!text-red-600 hover:!border-red-200 dark:hover:!bg-red-900/30 dark:hover:!text-red-400 dark:hover:!border-red-800 transition-colors" 
+              title="Stop"
+            >
               <Square className="w-3.5 h-3.5" />
             </button>
             
@@ -241,13 +263,25 @@ function VMRow({ vm, parentGroup, onEdit, groupColor, onStartError }: { vm: VM; 
 
   const rowStyle = groupColor ? { borderLeft: `3px solid ${groupColor}` } : {}
 
+  const iconBgClass = !serverOnline ? 'bg-slate-100 dark:bg-slate-800'
+    : vm.status === 'running' ? 'bg-emerald-100 dark:bg-emerald-900/30'
+    : vm.status === 'paused' ? 'bg-amber-100 dark:bg-amber-900/30'
+    : vm.status === 'starting' ? 'bg-blue-100 dark:bg-blue-900/30'
+    : 'bg-red-100 dark:bg-red-900/30'
+
+  const iconTextClass = !serverOnline ? 'text-slate-400'
+    : vm.status === 'running' ? 'text-emerald-600 dark:text-emerald-400'
+    : vm.status === 'paused' ? 'text-amber-600 dark:text-amber-400'
+    : vm.status === 'starting' ? 'text-blue-600 dark:text-blue-400'
+    : 'text-red-600 dark:text-red-400'
+
   return (
     <>
     <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors" style={rowStyle}>
       <td className="px-5 py-3">
         <div className="flex items-center gap-3">
-          <div className={clsx('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0', isRunning ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-800')}>
-            <Monitor className={clsx('w-3.5 h-3.5', isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400')} />
+          <div className={clsx('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0', iconBgClass)}>
+            <Monitor className={clsx('w-3.5 h-3.5', iconTextClass)} />
           </div>
           <div className="min-w-0">
             {/* VM Name und das SharedBadge nebeneinander */}
@@ -276,7 +310,11 @@ function VMRow({ vm, parentGroup, onEdit, groupColor, onStartError }: { vm: VM; 
                 <Monitor className="w-3 h-3" />
                 {isLockedByOther ? `Console (🔒 ${vm.locked_by_username})` : 'Console'}
               </button>
-              <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary text-xs py-1 px-2 disabled:opacity-60" title="Stop">
+<button 
+                onClick={() => stopMut.mutate()} 
+                disabled={stopMut.isPending} 
+                className="btn-secondary text-xs py-1 px-2 disabled:opacity-60 hover:!bg-red-100 hover:!text-red-600 hover:!border-red-200 dark:hover:!bg-red-900/30 dark:hover:!text-red-400 dark:hover:!border-red-800 transition-colors"
+              >
                 {stopMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
               </button>
               
@@ -532,9 +570,17 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
 
 export default function VMsPage() {
   const qc = useQueryClient()
-  const { currentUser, addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
-  const [view, setView] = useState<ViewMode>('grid')
+const { currentUser, addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
+  const [view, setView] = useState<ViewMode>(() => {
+    const savedMode = localStorage.getItem('vmViewPreference');
+    return (savedMode === 'grid' || savedMode === 'list') ? savedMode : 'grid';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('vmViewPreference', view);
+  }, [view]);
   const [showCreateVM, setShowCreateVM] = useState(false)
+  const [showImportVM, setShowImportVM] = useState(false)
   const [editVM, setEditVM] = useState<VM | null>(null)
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [editGroup, setEditGroup] = useState<VMGroup | null>(null)
@@ -676,20 +722,34 @@ export default function VMsPage() {
           <button onClick={() => setView('list')} className={clsx('btn-ghost p-2', view === 'list' && 'text-blue-600 dark:text-blue-400')}>
             <List className="w-4 h-4" />
           </button>
-        {(currentUser?.is_admin || currentUser?.can_manage_groups) && (
-            <button onClick={() => setShowCreateGroup(true)} disabled={!serverOnline} className="btn-secondary disabled:opacity-60" title={!serverOnline ? 'Server unavailable' : undefined}>
-              <FolderPlus className="w-4 h-4" />New Group
-            </button>
-          )}
+{(currentUser?.is_admin || currentUser?.can_manage_groups) && (
+          <button onClick={() => setShowCreateGroup(true)} disabled={!serverOnline} className="btn-secondary disabled:opacity-60" title={!serverOnline ? 'Server unavailable' : undefined}>
+            <FolderPlus className="w-4 h-4" />New Group
+          </button>
+        )}
         {(currentUser?.is_admin || currentUser?.can_manage_vms) && (
-            <button
-              disabled={!serverOnline}
-              onClick={() => atVMQuota ? addToast(`VM quota reached.`, 'error') : setShowCreateVM(true)}
-              className={clsx('btn-primary', (atVMQuota || !serverOnline) && 'opacity-60')}
-            >
-              <Plus className="w-4 h-4" />New VM
-            </button>
-          )}
+          <button
+            disabled={!serverOnline}
+            onClick={() => atVMQuota ? addToast(`VM quota reached (${userStats!.max_vms} VMs). Delete a VM to import a new one.`, 'error') : setShowImportVM(true)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg text-white bg-amber-500 hover:bg-amber-600 shadow-sm transition-colors', 
+              (atVMQuota || !serverOnline) && 'opacity-60 cursor-not-allowed'
+            )}
+            title={!serverOnline ? 'Server unavailable' : atVMQuota ? `Quota reached: ${userStats?.max_vms} VMs` : undefined}
+          >
+            <FolderDown className="w-4 h-4" />Import VM
+          </button>
+        )}
+        {(currentUser?.is_admin || currentUser?.can_manage_vms) && (
+          <button
+            disabled={!serverOnline}
+            onClick={() => atVMQuota ? addToast(`VM quota reached (${userStats!.max_vms} VMs). Delete a VM to create a new one.`, 'error') : setShowCreateVM(true)}
+            className={clsx('btn-primary', (atVMQuota || !serverOnline) && 'opacity-60')}
+            title={!serverOnline ? 'Server unavailable' : atVMQuota ? `Quota reached: ${userStats?.max_vms} VMs` : undefined}
+          >
+            <Plus className="w-4 h-4" />New VM
+          </button>
+        )}
         </div>
       </div>
 
@@ -778,6 +838,19 @@ export default function VMsPage() {
           onClose={() => setShowCreateVM(false)}
           onSave={async (name, desc, groupId, config, sharedWith) => {
             await createVMMut.mutateAsync({ name, description: desc, group_id: groupId ?? undefined, config, shared_with_user_ids: sharedWith })
+          }}
+        />
+      )}
+
+      {/* Import VM modal */}
+      {showImportVM && (
+        <ImportVMModal
+          groups={groups}
+          onClose={() => setShowImportVM(false)}
+          onSuccess={(vmId) => {
+             // Invalidate the cache to reload the VM list automatically
+             qc.invalidateQueries({ queryKey: ['vms'] })
+             addToast('VM successfully imported!', 'success')
           }}
         />
       )}
