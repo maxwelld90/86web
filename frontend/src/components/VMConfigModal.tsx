@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, ChevronRight, HardDrive, Monitor, Volume2, Network, Cpu, Settings2, UsbIcon, Upload, Trash2, Disc, Save, FolderOpen, Plus, CloudOff, ServerCog } from 'lucide-react'
 import { VMConfig, HardwareLists, HardwareOption } from '../types'
-import { systemApi, mediaApi, defaultConfig, formatBytes } from '../lib/api'
+import { systemApi, mediaApi, userApi, defaultConfig, formatBytes } from '../lib/api'
 import { useStore } from '../store/useStore'
 import { withBusGroups } from '../lib/busGroups'
 import { clsx } from 'clsx'
@@ -15,8 +15,9 @@ interface Props {
   initialName?: string
   initialDesc?: string
   initialGroupId?: number
-  groups: { id: number; name: string; color: string; network_enabled: boolean }[]
-  onSave: (name: string, desc: string, groupId: number | null, config: VMConfig) => Promise<void>
+  groups: { id: number; name: string; color: string; network_enabled: boolean; shared_with_user_ids?: number[] }[]
+  initialSharedWith?: number[]
+  onSave: (name: string, desc: string, groupId: number | null, config: VMConfig, sharedWith: number[]) => Promise<void>
   onClose: () => void
   title: string
   readOnly?: boolean
@@ -290,13 +291,15 @@ function hddBusLimits(bus: string): {maxCyl: number, maxHeads: number, maxSpt: n
   return { maxCyl: 266305, maxHeads: 255, maxSpt: 255 }
 }
 
-export default function VMConfigModal({ vmId, initialConfig, initialName = '', initialDesc = '', initialGroupId, groups, onSave, onClose, title, readOnly = false }: Props) {
+export default function VMConfigModal({ vmId, initialConfig, initialName = '', initialDesc = '', initialGroupId, groups, onSave, onClose, title, readOnly = false, initialSharedWith }: Props) {
   const qc = useQueryClient()
   const [activeTab, setActiveTab] = useState<Tab>('general')
   const [name, setName] = useState(initialName)
   const [desc, setDesc] = useState(initialDesc)
   const [groupId, setGroupId] = useState<number | null>(initialGroupId ?? null)
   const [cfg, setCfg] = useState<VMConfig>(initialConfig || defaultConfig())
+  const [sharedWith, setSharedWith] = useState<number[]>(initialSharedWith || [])
+  const { currentUser } = useStore()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -305,6 +308,11 @@ export default function VMConfigModal({ vmId, initialConfig, initialName = '', i
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [imagePicker, setImagePicker] = useState<{ key: string; kind: 'floppy' | 'cdrom' } | null>(null)
   const { serverOnline, setActiveUpload, updateUploadProgress } = useStore()
+  const { data: users = [] } = useQuery({ 
+    queryKey: ['users'], 
+    queryFn: userApi.list,
+    enabled: !!currentUser?.is_admin 
+  })
 
   const { data: hw } = useQuery({ queryKey: ['hardware'], queryFn: systemApi.hardware })
   const { data: voodooTypes } = useQuery({ queryKey: ['voodoo-types'], queryFn: systemApi.voodooTypes })
@@ -691,7 +699,7 @@ export default function VMConfigModal({ vmId, initialConfig, initialName = '', i
     setSaving(true)
     setError('')
     try {
-      await onSave(name, desc, groupId, cfg)
+      await onSave(name, desc, groupId, cfg, sharedWith)
       onClose()
     } catch (e: any) {
       setError(e.message || 'Save failed')
@@ -784,6 +792,67 @@ export default function VMConfigModal({ vmId, initialConfig, initialName = '', i
                       <p className="text-xs text-slate-400 mt-1">No networking — VMs in this group are isolated</p>
                     ) : null })()}
                   </Field>
+                  <FieldGroup label="Sharing">
+                  <Field label="Shared with user" hint="Select users who can access this VM">
+                    {(() => {
+                      const selectedGroup = groups.find(g => g.id === groupId);
+                      const isGroupShared = selectedGroup && selectedGroup.shared_with_user_ids && selectedGroup.shared_with_user_ids.length > 0;
+                      const effectiveSharedWith = isGroupShared ? selectedGroup.shared_with_user_ids! : sharedWith;
+
+                      if (isGroupShared) {
+                        return (
+                          <div className="space-y-3">
+                            <p className="text-xs text-amber-500 dark:text-amber-400 font-medium">
+                              Permissions are inherited from the group "{selectedGroup.name}". 
+                              To assign specific permissions, remove this VM from the group first.
+                            </p>
+                            <div className="flex flex-wrap gap-2 opacity-60 pointer-events-none">
+                              {users.filter(u => effectiveSharedWith.includes(u.id)).map(u => (
+                                <span key={u.id} className="inline-flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2.5 py-1 rounded-md text-sm font-medium">
+                                  {u.username}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      if (!currentUser?.is_admin) {
+                        return <p className="text-xs text-slate-500 mt-2">Only Admins can share VMs.</p>;
+                      }
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap gap-2">
+                            {users.filter(u => sharedWith.includes(u.id)).map(u => (
+                              <span key={u.id} className="inline-flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2.5 py-1 rounded-md text-sm font-medium">
+                                {u.username}
+                                <button type="button" onClick={() => setSharedWith(sharedWith.filter(id => id !== u.id))} className="hover:text-red-500 focus:outline-none transition-colors">
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </span>
+                            ))}
+                            {sharedWith.length === 0 && <span className="text-sm text-slate-500 italic">Not shared with any user.</span>}
+                          </div>
+                          {users.filter(u => u.id !== currentUser.id && !sharedWith.includes(u.id)).length > 0 && (
+                            <select
+                              className="input w-full text-sm"
+                              value=""
+                              onChange={e => {
+                                if (e.target.value) setSharedWith([...sharedWith, parseInt(e.target.value)])
+                              }}
+                            >
+                              <option value="">+ Add another user...</option>
+                              {users.filter(u => u.id !== currentUser.id && !sharedWith.includes(u.id)).map(u => (
+                                <option key={u.id} value={u.id}>{u.username}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </Field>
+                </FieldGroup>
                 </FieldGroup>
               </>
             )}

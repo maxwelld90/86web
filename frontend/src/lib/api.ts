@@ -66,10 +66,21 @@ export const vmApi = {
 
   get: (id: number) => request<VM>(`/vms/${id}`),
 
-  create: (data: { name: string; description?: string; group_id?: number; config: VMConfig }) =>
+// NEW: Fetches the list of VM folders that exist in vms/ but are not yet registered in the database
+  getUnregistered: () => 
+    request<{ unregistered: { folder_name: string; machine: string }[] }>('/vms/unregistered'),
+  
+  // NEW: Sends the command to import one of these discovered folders as a new VM
+  importVM: (data: { folder_name: string; vm_name: string; description?: string; group_id: number | null }) => 
+    request<{ vm: VM }>('/vms/import', { 
+      method: 'POST', 
+      body: JSON.stringify(data) 
+    }),
+
+  create: (data: { name: string; description?: string; group_id?: number; config: VMConfig; shared_with_user_ids?: number[] }) =>
     request<VM>('/vms', { method: 'POST', body: JSON.stringify(data) }),
 
-  update: (id: number, data: { name?: string; description?: string; group_id?: number | null; config?: VMConfig }) =>
+  update: (id: number, data: { name?: string; description?: string; group_id?: number | null; config?: VMConfig; shared_with_user_ids?: number[] }) =>
     request<VM>(`/vms/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   delete: (id: number) => request<void>(`/vms/${id}`, { method: 'DELETE' }),
@@ -79,7 +90,16 @@ export const vmApi = {
   reset: (id: number) => request<{ status: string }>(`/vms/${id}/reset`, { method: 'POST' }),
   pause: (id: number) => request<{ status: string }>(`/vms/${id}/pause`, { method: 'POST' }),
   sendKey: (id: number, key: string) => request<{ status: string }>(`/vms/${id}/send-key`, { method: 'POST', body: JSON.stringify({ key }) }),
-  status: (id: number) => request<{ id: number; status: string; vnc_port?: number; ws_port?: number; uptime?: number }>(`/vms/${id}/status`),
+  status: (id: number) => request<{ id: number; status: string; vnc_port?: number; ws_port?: number; uptime?: number; locked_by_user_id?: number | null; locked_by_username?: string | null }>(`/vms/${id}/status`),
+
+  getUnregistered: () => 
+    request<{ unregistered: { folder_name: string; machine: string }[] }>('/vms/unregistered'),
+  
+  importVM: (data: { folder_name: string; vm_name: string; description?: string; group_id: number | null }) => 
+    request<{ vm: VM }>('/vms/import', { 
+      method: 'POST', 
+      body: JSON.stringify(data) 
+    }),
 
   mountDrive: (id: number, driveKey: string, path: string) =>
     request<{ status: string; drive_key: string; path: string }>(
@@ -96,9 +116,9 @@ export const vmApi = {
 
   // Groups
   listGroups: () => request<VMGroup[]>('/vms/groups'),
-  createGroup: (data: { name: string; description?: string; color: string; network_enabled?: boolean }) =>
+  createGroup: (data: { name: string; description?: string; color: string; network_enabled?: boolean; shared_with_user_ids?: number[] }) =>
     request<VMGroup>('/vms/groups', { method: 'POST', body: JSON.stringify(data) }),
-  updateGroup: (id: number, data: Partial<{ name: string; description: string; color: string; network_enabled: boolean }>) =>
+  updateGroup: (id: number, data: Partial<{ name: string; description: string; color: string; network_enabled: boolean; shared_with_user_ids: number[] }>) =>
     request<VMGroup>(`/vms/groups/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteGroup: (id: number) => request<void>(`/vms/groups/${id}`, { method: 'DELETE' }),
 }

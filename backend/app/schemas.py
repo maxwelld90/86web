@@ -28,6 +28,10 @@ class UserBase(BaseModel):
     is_active: bool = True
     max_vms: int = 10
     max_storage_gb: int = 100
+    can_manage_vms: bool = True
+    can_manage_groups: bool = True
+    can_access_library: bool = True
+    can_upload_images: bool = True
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
@@ -39,6 +43,10 @@ class UserUpdate(BaseModel):
     max_vms: Optional[int] = None
     max_storage_gb: Optional[int] = None
     password: Optional[str] = None
+    can_manage_vms: Optional[bool] = None
+    can_manage_groups: Optional[bool] = None
+    can_access_library: Optional[bool] = None
+    can_upload_images: Optional[bool] = None
 
 class UserResponse(UserBase):
     id: int
@@ -62,13 +70,14 @@ class VMGroupBase(BaseModel):
     network_enabled: bool = False
 
 class VMGroupCreate(VMGroupBase):
-    pass
+    shared_with_user_ids: Optional[List[int]] = []
 
 class VMGroupUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     color: Optional[str] = None
     network_enabled: Optional[bool] = None
+    shared_with_user_ids: Optional[List[int]] = []
 
 class VMGroupResponse(VMGroupBase):
     id: int
@@ -76,6 +85,7 @@ class VMGroupResponse(VMGroupBase):
     created_at: datetime
     vm_count: int = 0
     has_running_vms: bool = False
+    shared_with_user_ids: Optional[List[int]] = []
 
     class Config:
         from_attributes = True
@@ -293,12 +303,16 @@ class VMUpdate(BaseModel):
     description: Optional[str] = None
     group_id: Optional[int] = None
     config: Optional[VMConfig] = None
+    shared_with_user_ids: Optional[List[int]] = None
 
 class VMResponse(VMBase):
     id: int
     uuid: str
     user_id: int
     status: str
+    locked_by_user_id: Optional[int] = None
+    locked_by_username: Optional[str] = None
+    
     vnc_port: Optional[int] = None
     ws_port: Optional[int] = None
     config: Dict[str, Any]
@@ -309,6 +323,7 @@ class VMResponse(VMBase):
     owner_username: Optional[str] = None
     group_name: Optional[str] = None
     group_color: Optional[str] = None
+    shared_with_user_ids: List[int] = []
 
     class Config:
         from_attributes = True

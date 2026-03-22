@@ -2,9 +2,12 @@ import logging
 import os
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+import uuid
+from .import_vms import VMImportRequest, scan_for_unregistered_folders, parse_86box_cfg
 
 log = logging.getLogger("86web")
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from datetime import datetime
 
@@ -35,6 +38,9 @@ def _vm_to_response(vm: VM) -> VMResponse:
     if vm.group:
         resp.group_name = vm.group.name
         resp.group_color = vm.group.color
+    if vm.locked_by:
+        resp.locked_by_username = vm.locked_by.username
+    resp.shared_with_user_ids = [u.id for u in vm.shared_with]
     return resp
 
 
@@ -42,8 +48,20 @@ def _group_to_response(g: VMGroup) -> VMGroupResponse:
     resp = VMGroupResponse.model_validate(g)
     resp.vm_count = len(g.vms)
     resp.has_running_vms = any(vm.status == "running" for vm in g.vms)
+    resp.shared_with_user_ids = [u.id for u in g.shared_with]
     return resp
 
+def _get_accessible_vm(db: Session, vm_id: int, user: User) -> VM:
+    vm = db.query(VM).filter(VM.id == vm_id).first()
+    if not vm:
+        raise HTTPException(404, "VM not found")   
+    if vm.user_id == user.id:
+        return vm 
+    if user in vm.shared_with:
+        return vm
+    if vm.group and user in vm.group.shared_with:
+        return vm
+    raise HTTPException(403, "Access denied")
 
 # ─── VM Groups ────────────────────────────────────────────────────────────────
 
@@ -52,7 +70,13 @@ async def list_groups(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    groups = db.query(VMGroup).filter(VMGroup.user_id == current_user.id).all()
+    query = db.query(VMGroup).filter(
+        or_(
+            VMGroup.user_id == current_user.id,
+            VMGroup.shared_with.any(User.id == current_user.id)
+        )
+    )
+    groups = query.all()
     return [_group_to_response(g) for g in groups]
 
 
@@ -62,6 +86,9 @@ async def create_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to create VM groups")
+
     group = VMGroup(
         name=body.name,
         description=body.description,
@@ -69,6 +96,11 @@ async def create_group(
         network_enabled=body.network_enabled,
         user_id=current_user.id,
     )
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        group.shared_with = shared_users
+
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -82,9 +114,14 @@ async def update_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+
     group = db.query(VMGroup).filter(VMGroup.id == group_id, VMGroup.user_id == current_user.id).first()
     if not group:
         raise HTTPException(404, "Group not found")
+    
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to edit / delete VM groups")
+
     if body.name is not None:
         group.name = body.name
     if body.description is not None:
@@ -96,6 +133,14 @@ async def update_group(
             if any(vm.status == "running" for vm in group.vms):
                 raise HTTPException(400, "Cannot change networking while a VM in the group is running. Stop all VMs first.")
         group.network_enabled = body.network_enabled
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        if not current_user.is_admin and group.user_id != current_user.id:
+            raise HTTPException(403, "Only the owner can share this group")
+            
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        group.shared_with = shared_users
+
     db.commit()
     db.refresh(group)
     return _group_to_response(group)
@@ -107,6 +152,9 @@ async def delete_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to edit / delete VM groups")
+    
     group = db.query(VMGroup).filter(VMGroup.id == group_id, VMGroup.user_id == current_user.id).first()
     if not group:
         raise HTTPException(404, "Group not found")
@@ -119,25 +167,36 @@ async def delete_group(
 
 # ─── VMs ─────────────────────────────────────────────────────────────────────
 
-@router.get("/", response_model=List[VMResponse])
+@router.get("", response_model=List[VMResponse])
 async def list_vms(
     group_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(VM).filter(VM.user_id == current_user.id)
+    query = db.query(VM).filter(
+        or_(
+            VM.user_id == current_user.id,
+            VM.shared_with.any(User.id == current_user.id),
+            VM.group.has(VMGroup.shared_with.any(User.id == current_user.id))
+        )
+    )
+
     if group_id is not None:
         query = query.filter(VM.group_id == group_id)
-    vms = query.order_by(VM.name).all()
+        
+    vms = query.all()
     return [_vm_to_response(vm) for vm in vms]
 
 
-@router.post("/", response_model=VMResponse, status_code=201)
+@router.post("", response_model=VMResponse, status_code=201)
 async def create_vm(
     body: VMCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to create VMs")
+    
     # Quota checks (skipped when enforce_quotas is disabled)
     if _enforce_quotas(db):
         vm_count = db.query(VM).filter(VM.user_id == current_user.id).count()
@@ -163,6 +222,11 @@ async def create_vm(
         config=body.config.model_dump(),
         status="stopped",
     )
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        vm.shared_with = shared_users
+
     db.add(vm)
     db.commit()
     db.refresh(vm)
@@ -192,6 +256,90 @@ async def create_vm(
 
     return _vm_to_response(vm)
 
+@router.get("/unregistered")
+async def get_unregistered_vms(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retrieves all folders in the vms directory that are not yet registered in the database."""
+    db_uuids = {vm.uuid for vm in db.query(VM).all()}
+    unregistered = scan_for_unregistered_folders(settings.vms_path, db_uuids)
+    return {"unregistered": unregistered}
+
+# ─── Import VMs ──────────────────────────────────────────────────────────────
+
+@router.post("/import")
+async def import_vm(
+    body: VMImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Parses an existing 86box.cfg, writes it to the database, and assigns a UUID."""
+    source_path = os.path.join(settings.vms_path, body.folder_name)
+    cfg_path = os.path.join(source_path, "86box.cfg")
+    
+    if not os.path.isdir(source_path) or not os.path.exists(cfg_path):
+        raise HTTPException(404, "Folder or 86box.cfg not found")
+        
+    new_uuid = str(uuid.uuid4())
+    target_path = os.path.join(settings.vms_path, new_uuid)
+    
+    # Delegate the parsing logic
+    parsed_config = parse_86box_cfg(cfg_path)
+    
+    # --- NEW: Translate raw CPU Hz into the correct UI index ---
+    from ..hardware_lists import get_cpu_by_index
+    cpu_family = parsed_config.get("cpu_family", "8088")
+    raw_speed = parsed_config.pop("_raw_cpu_speed", 0)
+    speed_index = 0
+    if raw_speed > 0:
+        for i in range(50):  # Brute force check up to 50 speed steps
+            try:
+                rspeed, _ = get_cpu_by_index(cpu_family, i)
+                if rspeed == raw_speed:
+                    speed_index = i
+                    break
+            except Exception:
+                break  # Index out of bounds, stop searching
+    parsed_config["cpu_speed"] = speed_index
+    
+    # Rename the folder from whatever the user named it to the proper UUID
+    try:
+        os.rename(source_path, target_path)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to rename folder: {e}")
+        
+    # --- NEW: Move hard disks into 86web's strict folder structure ---
+    os.makedirs(os.path.join(target_path, "hdd"), exist_ok=True)
+    for i in range(1, 9):
+        n = f"{i:02d}"
+        orig_fn = parsed_config.pop(f"_hdd_{n}_fn_orig", None)
+        if orig_fn and parsed_config.get(f"hdd_{n}_enabled"):
+            old_file = orig_fn if os.path.isabs(orig_fn) else os.path.join(target_path, orig_fn)
+            new_file = os.path.join(target_path, "hdd", f"hdd{i}.img")
+            if os.path.exists(old_file) and old_file != new_file:
+                try:
+                    shutil.move(old_file, new_file)
+                except Exception as e:
+                    log.warning(f"Failed to move HDD {old_file} to {new_file}: {e}")
+
+    # Write the new entry into the database
+    new_vm = VM(
+        name=body.vm_name,
+        description=body.description,
+        uuid=new_uuid,
+        config=parsed_config,
+        user_id=current_user.id,
+        group_id=body.group_id
+    )
+    db.add(new_vm)
+    db.commit()
+    db.refresh(new_vm)
+    
+    # Trigger a clean write to ensure the config format perfectly matches 86web's standard
+    _write_86box_config(new_vm, target_path)
+    
+    return {"status": "imported", "vm": {"id": new_vm.id, "uuid": new_vm.uuid}}
 
 @router.get("/{vm_id}", response_model=VMResponse)
 async def get_vm(
@@ -199,9 +347,7 @@ async def get_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
     return _vm_to_response(vm)
 
 
@@ -212,6 +358,9 @@ async def update_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to edit / delete VMs")
+    
     vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
     if not vm:
         raise HTTPException(404, "VM not found")
@@ -240,6 +389,13 @@ async def update_vm(
             _write_86box_config(vm, vm_dir)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+    
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        if not current_user.is_admin and vm.user_id != current_user.id:
+            raise HTTPException(403, "Only the owner can share this VM")
+        
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        vm.shared_with = shared_users
 
     db.commit()
     db.refresh(vm)
@@ -252,6 +408,9 @@ async def delete_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to edit / delete VMs")
+    
     vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
     if not vm:
         raise HTTPException(404, "VM not found")
@@ -275,11 +434,12 @@ async def start_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
     if vm.status in ("running", "paused", "starting"):
         raise HTTPException(400, "VM is already active")
+
+    if vm.locked_by_user_id is not None and vm.locked_by_user_id != current_user.id:
+        raise HTTPException(403, f"VM is currently in use by {vm.locked_by.username}")
 
     # Enforce active VM limit (DB setting takes priority over runner default)
     raw_limit = db.query(SystemSetting).filter(SystemSetting.key == "active_vm_limit").first()
@@ -306,12 +466,14 @@ async def start_vm(
 
     # Claim the slot immediately so concurrent requests can't bypass the limit
     vm.status = "starting"
+    vm.locked_by_user_id = current_user.id
     db.commit()
 
     service = VMService()
     result = await service.start_vm(vm_id, vm_dir, network_group_id=network_group_id)
     if result.get("error"):
         vm.status = "stopped"
+        vm.locked_by_user_id = None
         db.commit()
         raise HTTPException(500, result["error"])
 
@@ -330,9 +492,10 @@ async def stop_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
+    if vm.locked_by_user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(403, "You cannot stop a VM started by another user")
+
     if vm.status not in ("running", "paused"):
         raise HTTPException(400, "VM is not running")
 
@@ -340,6 +503,7 @@ async def stop_vm(
     await service.stop_vm(vm_id)
 
     vm.status = "stopped"
+    vm.locked_by_user_id = None
     vm.vnc_port = None
     vm.ws_port = None
     vm.last_stopped = datetime.utcnow()
@@ -411,21 +575,21 @@ async def get_vm_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
 
-    # Check actual runner status
+    if vm.status == "stopped" and vm.locked_by_user_id is not None:
+        vm.locked_by_user_id = None
+        db.commit()
+
     service = VMService()
     runner_status = await service.get_vm_status(vm_id)
     actual_status = runner_status.get("status", "stopped")
 
     if actual_status != vm.status:
-        # Don't downgrade "starting" → "stopped": the runner may not have registered
-        # the VM yet. Let the start_vm endpoint own that transition.
         if not (vm.status == "starting" and actual_status == "stopped"):
             vm.status = actual_status
             if actual_status == "stopped":
+                vm.locked_by_user_id = None
                 vm.vnc_port = None
                 vm.ws_port = None
                 vm.last_stopped = datetime.utcnow()
@@ -437,6 +601,7 @@ async def get_vm_status(
         "vnc_port": vm.vnc_port,
         "ws_port": vm.ws_port,
         "uptime": runner_status.get("uptime"),
+        "locked_by_user_id": vm.locked_by_user_id
     }
 
 
@@ -502,16 +667,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
     config_override: optional key/value pairs merged into cfg at write time
     (not persisted to DB). Used e.g. to inject PCap transport for group networking.
     """
-    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video, get_cdrom_drive_types
-    _cdrom_drive_list = get_cdrom_drive_types()
-    def _cdrom_type_index(internal_name: str) -> int | None:
-        """Map a cdrom_drive_type internal_name to its numeric 86Box index."""
-        if not internal_name:
-            return None
-        for idx, d in enumerate(_cdrom_drive_list):
-            if d.get("internal_name") == internal_name:
-                return idx
-        return None
+    from ..hardware_lists import get_cpu_by_index, machine_has_builtin_video
 
     cfg = dict(vm.config or {})
     if config_override:
@@ -530,6 +686,12 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
         if isinstance(v, float) and v == int(v):
             return str(int(v))
         return str(v)
+    def _resolve_media(fn: str) -> str:
+        if not fn:
+            return ""
+        if os.path.isabs(fn):
+            return fn
+        return os.path.join(vm_dir, fn)
 
     # ── [Machine] ──────────────────────────────────────────────────────────────
     section("Machine")
@@ -685,7 +847,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             opt(f"fdd_{n}_check_bpb", 0)
         fn = cfg.get(f"fdd_{n}_fn", "")
         if fn and ftype != "none":
-            opt(f"fdd_{n}_fn", fn)
+            opt(f"fdd_{n}_fn", _resolve_media(fn))
 
     # CD-ROM drives 01-04
     _default_cdrom_channels = {1: "1:0", 2: "1:1", 3: "2:0", 4: "2:1"}
@@ -698,15 +860,15 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
             speed = cfg.get(f"cdrom_{n}_speed", 24)
             if speed != 24:
                 opt(f"cdrom_{n}_speed", speed)
-            drive_type_idx = _cdrom_type_index(cfg.get(f"cdrom_{n}_drive_type", ""))
-            if drive_type_idx is not None:
-                opt(f"cdrom_{n}_type", drive_type_idx)
+            drive_type = cfg.get(f"cdrom_{n}_drive_type", "")
+            if drive_type:
+                opt(f"cdrom_{n}_type", drive_type)
             if bus_str == "atapi":
                 channel = cfg.get(f"cdrom_{n}_ide_channel") or _default_cdrom_channels[i]
                 opt(f"cdrom_{n}_ide_channel", channel)
             fn = cfg.get(f"cdrom_{n}_fn", "")
             if fn:
-                opt(f"cdrom_{n}_image_path", fn)
+                opt(f"cdrom_{n}_image_path", _resolve_media(fn))
 
     # ── [Ports (COM & LPT)] ───────────────────────────────────────────────────
     section("Ports (COM & LPT)")
@@ -820,7 +982,6 @@ async def delete_media(
     if not os.path.exists(fp):
         raise HTTPException(404, "File not found")
     os.remove(fp)
-
 
 # ─── Drive Management (mount / eject / blank floppy) ─────────────────────────
 

@@ -12,6 +12,10 @@ export interface User {
   vm_count: number
   disk_usage_bytes: number
   is_bootstrap?: boolean
+  can_manage_vms?: boolean;
+  can_manage_groups?: boolean;
+  can_access_library?: boolean;
+  can_upload_images?: boolean;
 }
 
 export interface VMGroup {
@@ -24,6 +28,7 @@ export interface VMGroup {
   created_at: string
   vm_count: number
   has_running_vms: boolean
+  shared_with_user_ids?: number[];
 }
 
 export interface VMConfig {
@@ -223,6 +228,9 @@ export interface VM {
   owner_username?: string
   group_name?: string
   group_color?: string
+  locked_by_user_id?: number | null;
+  locked_by_username?: string | null;
+  shared_with_user_ids?: number[];
 }
 
 export interface SystemStats {
