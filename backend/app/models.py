@@ -1,12 +1,25 @@
 import uuid as _uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, ForeignKey,
-    Text, JSON, Float
+    Text, JSON, Float, Table
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from .database import Base
 
+user_vm_access = Table(
+    "user_vm_access",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("vm_id", Integer, ForeignKey("vms.id", ondelete="CASCADE"), primary_key=True)
+)
+
+user_group_access = Table(
+    "user_group_access",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("vm_groups.id", ondelete="CASCADE"), primary_key=True),
+)
 
 class User(Base):
     __tablename__ = "users"
@@ -14,17 +27,27 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(64), unique=True, index=True, nullable=False)
     email = Column(String(256), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(256), nullable=True)  # Null for LDAP users
+    hashed_password = Column(String(256), nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_ldap = Column(Boolean, default=False, nullable=False)
     max_vms = Column(Integer, default=10, nullable=False)
     max_storage_gb = Column(Integer, default=100, nullable=False)
+    
+    can_manage_vms = Column(Boolean, default=True, nullable=False)
+    can_manage_groups = Column(Boolean, default=True, nullable=False)
+    can_access_library = Column(Boolean, default=True, nullable=False)
+    can_upload_images = Column(Boolean, default=True, nullable=False)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login = Column(DateTime, nullable=True)
 
-    vms = relationship("VM", back_populates="owner", cascade="all, delete-orphan")
+    # Existing Relations (User)
+    vms = relationship("VM", foreign_keys="[VM.user_id]", back_populates="owner", cascade="all, delete-orphan")
     groups = relationship("VMGroup", back_populates="owner", cascade="all, delete-orphan")
+    
+    accessible_vms = relationship("VM", secondary=user_vm_access, back_populates="shared_with")
+    accessible_groups = relationship("VMGroup", secondary=user_group_access, back_populates="shared_with")
 
 
 class VMGroup(Base):
@@ -40,6 +63,9 @@ class VMGroup(Base):
 
     owner = relationship("User", back_populates="groups")
     vms = relationship("VM", back_populates="group")
+    
+    # NEW: With which group is this VM shared?
+    shared_with = relationship("User", secondary=user_group_access, back_populates="accessible_groups")
 
 
 class VM(Base):
@@ -52,25 +78,25 @@ class VM(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     group_id = Column(Integer, ForeignKey("vm_groups.id"), nullable=True)
 
-    # Status: stopped | starting | running | paused | error
     status = Column(String(32), default="stopped", nullable=False)
 
-    # Network (assigned by runner when VM starts)
+    # NEW: Concurrency Lock
+    locked_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
     vnc_port = Column(Integer, nullable=True)
     ws_port = Column(Integer, nullable=True)
-
-    # Full 86Box configuration stored as JSON
     config = Column(JSON, nullable=False, default=dict)
-
-    # Disk usage in bytes (updated periodically)
     disk_usage_bytes = Column(Integer, default=0, nullable=False)
-
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_started = Column(DateTime, nullable=True)
     last_stopped = Column(DateTime, nullable=True)
 
-    owner = relationship("User", back_populates="vms")
+    owner = relationship("User", back_populates="vms", foreign_keys=[user_id])
     group = relationship("VMGroup", back_populates="vms")
+    
+    # NEW: Relations for lock and access
+    locked_by = relationship("User", foreign_keys=[locked_by_user_id])
+    shared_with = relationship("User", secondary=user_vm_access, back_populates="accessible_vms")
 
 
 class SystemSetting(Base):

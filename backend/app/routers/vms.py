@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 
 log = logging.getLogger("86web")
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from datetime import datetime
 
@@ -35,6 +36,9 @@ def _vm_to_response(vm: VM) -> VMResponse:
     if vm.group:
         resp.group_name = vm.group.name
         resp.group_color = vm.group.color
+    if vm.locked_by:
+        resp.locked_by_username = vm.locked_by.username
+    resp.shared_with_user_ids = [u.id for u in vm.shared_with]
     return resp
 
 
@@ -42,8 +46,20 @@ def _group_to_response(g: VMGroup) -> VMGroupResponse:
     resp = VMGroupResponse.model_validate(g)
     resp.vm_count = len(g.vms)
     resp.has_running_vms = any(vm.status == "running" for vm in g.vms)
+    resp.shared_with_user_ids = [u.id for u in g.shared_with]
     return resp
 
+def _get_accessible_vm(db: Session, vm_id: int, user: User) -> VM:
+    vm = db.query(VM).filter(VM.id == vm_id).first()
+    if not vm:
+        raise HTTPException(404, "VM not found")   
+    if vm.user_id == user.id:
+        return vm 
+    if user in vm.shared_with:
+        return vm
+    if vm.group and user in vm.group.shared_with:
+        return vm
+    raise HTTPException(403, "Access denied")
 
 # ─── VM Groups ────────────────────────────────────────────────────────────────
 
@@ -52,7 +68,13 @@ async def list_groups(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    groups = db.query(VMGroup).filter(VMGroup.user_id == current_user.id).all()
+    query = db.query(VMGroup).filter(
+        or_(
+            VMGroup.user_id == current_user.id,
+            VMGroup.shared_with.any(User.id == current_user.id)
+        )
+    )
+    groups = query.all()
     return [_group_to_response(g) for g in groups]
 
 
@@ -62,6 +84,9 @@ async def create_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to create VM groups")
+
     group = VMGroup(
         name=body.name,
         description=body.description,
@@ -69,6 +94,11 @@ async def create_group(
         network_enabled=body.network_enabled,
         user_id=current_user.id,
     )
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        group.shared_with = shared_users
+
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -82,9 +112,14 @@ async def update_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+
     group = db.query(VMGroup).filter(VMGroup.id == group_id, VMGroup.user_id == current_user.id).first()
     if not group:
         raise HTTPException(404, "Group not found")
+    
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to edit / delete VM groups")
+
     if body.name is not None:
         group.name = body.name
     if body.description is not None:
@@ -96,6 +131,14 @@ async def update_group(
             if any(vm.status == "running" for vm in group.vms):
                 raise HTTPException(400, "Cannot change networking while a VM in the group is running. Stop all VMs first.")
         group.network_enabled = body.network_enabled
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        if not current_user.is_admin and group.user_id != current_user.id:
+            raise HTTPException(403, "Only the owner can share this group")
+            
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        group.shared_with = shared_users
+
     db.commit()
     db.refresh(group)
     return _group_to_response(group)
@@ -107,6 +150,9 @@ async def delete_group(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_groups:
+        raise HTTPException(403, "No Permission to edit / delete VM groups")
+    
     group = db.query(VMGroup).filter(VMGroup.id == group_id, VMGroup.user_id == current_user.id).first()
     if not group:
         raise HTTPException(404, "Group not found")
@@ -119,25 +165,36 @@ async def delete_group(
 
 # ─── VMs ─────────────────────────────────────────────────────────────────────
 
-@router.get("/", response_model=List[VMResponse])
+@router.get("", response_model=List[VMResponse])
 async def list_vms(
     group_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(VM).filter(VM.user_id == current_user.id)
+    query = db.query(VM).filter(
+        or_(
+            VM.user_id == current_user.id,
+            VM.shared_with.any(User.id == current_user.id),
+            VM.group.has(VMGroup.shared_with.any(User.id == current_user.id))
+        )
+    )
+
     if group_id is not None:
         query = query.filter(VM.group_id == group_id)
-    vms = query.order_by(VM.name).all()
+        
+    vms = query.all()
     return [_vm_to_response(vm) for vm in vms]
 
 
-@router.post("/", response_model=VMResponse, status_code=201)
+@router.post("", response_model=VMResponse, status_code=201)
 async def create_vm(
     body: VMCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to create VMs")
+    
     # Quota checks (skipped when enforce_quotas is disabled)
     if _enforce_quotas(db):
         vm_count = db.query(VM).filter(VM.user_id == current_user.id).count()
@@ -163,6 +220,11 @@ async def create_vm(
         config=body.config.model_dump(),
         status="stopped",
     )
+
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        vm.shared_with = shared_users
+
     db.add(vm)
     db.commit()
     db.refresh(vm)
@@ -199,9 +261,7 @@ async def get_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
     return _vm_to_response(vm)
 
 
@@ -212,6 +272,9 @@ async def update_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to edit / delete VMs")
+    
     vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
     if not vm:
         raise HTTPException(404, "VM not found")
@@ -240,6 +303,13 @@ async def update_vm(
             _write_86box_config(vm, vm_dir)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+    
+    if hasattr(body, 'shared_with_user_ids') and body.shared_with_user_ids is not None:
+        if not current_user.is_admin and vm.user_id != current_user.id:
+            raise HTTPException(403, "Only the owner can share this VM")
+        
+        shared_users = db.query(User).filter(User.id.in_(body.shared_with_user_ids)).all()
+        vm.shared_with = shared_users
 
     db.commit()
     db.refresh(vm)
@@ -252,6 +322,9 @@ async def delete_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_manage_vms:
+        raise HTTPException(403, "No Permission to edit / delete VMs")
+    
     vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
     if not vm:
         raise HTTPException(404, "VM not found")
@@ -275,11 +348,12 @@ async def start_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
     if vm.status in ("running", "paused", "starting"):
         raise HTTPException(400, "VM is already active")
+
+    if vm.locked_by_user_id is not None and vm.locked_by_user_id != current_user.id:
+        raise HTTPException(403, f"VM is currently in use by {vm.locked_by.username}")
 
     # Enforce active VM limit (DB setting takes priority over runner default)
     raw_limit = db.query(SystemSetting).filter(SystemSetting.key == "active_vm_limit").first()
@@ -306,12 +380,14 @@ async def start_vm(
 
     # Claim the slot immediately so concurrent requests can't bypass the limit
     vm.status = "starting"
+    vm.locked_by_user_id = current_user.id
     db.commit()
 
     service = VMService()
     result = await service.start_vm(vm_id, vm_dir, network_group_id=network_group_id)
     if result.get("error"):
         vm.status = "stopped"
+        vm.locked_by_user_id = None
         db.commit()
         raise HTTPException(500, result["error"])
 
@@ -330,9 +406,10 @@ async def stop_vm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
+    if vm.locked_by_user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(403, "You cannot stop a VM started by another user")
+
     if vm.status not in ("running", "paused"):
         raise HTTPException(400, "VM is not running")
 
@@ -340,6 +417,7 @@ async def stop_vm(
     await service.stop_vm(vm_id)
 
     vm.status = "stopped"
+    vm.locked_by_user_id = None
     vm.vnc_port = None
     vm.ws_port = None
     vm.last_stopped = datetime.utcnow()
@@ -411,21 +489,21 @@ async def get_vm_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    vm = db.query(VM).filter(VM.id == vm_id, VM.user_id == current_user.id).first()
-    if not vm:
-        raise HTTPException(404, "VM not found")
+    vm = _get_accessible_vm(db, vm_id, current_user)
 
-    # Check actual runner status
+    if vm.status == "stopped" and vm.locked_by_user_id is not None:
+        vm.locked_by_user_id = None
+        db.commit()
+
     service = VMService()
     runner_status = await service.get_vm_status(vm_id)
     actual_status = runner_status.get("status", "stopped")
 
     if actual_status != vm.status:
-        # Don't downgrade "starting" → "stopped": the runner may not have registered
-        # the VM yet. Let the start_vm endpoint own that transition.
         if not (vm.status == "starting" and actual_status == "stopped"):
             vm.status = actual_status
             if actual_status == "stopped":
+                vm.locked_by_user_id = None
                 vm.vnc_port = None
                 vm.ws_port = None
                 vm.last_stopped = datetime.utcnow()
@@ -437,6 +515,7 @@ async def get_vm_status(
         "vnc_port": vm.vnc_port,
         "ws_port": vm.ws_port,
         "uptime": runner_status.get("uptime"),
+        "locked_by_user_id": vm.locked_by_user_id
     }
 
 

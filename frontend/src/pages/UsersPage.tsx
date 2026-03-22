@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, Shield, User as UserIcon, CheckCircle, XCircle } 
 import { userApi, formatBytes } from '../lib/api'
 import { useStore } from '../store/useStore'
 import { User } from '../types'
+import { clsx } from 'clsx'
 import ConfirmDialog from '../components/ConfirmDialog'
 
 function UserModal({ initial, onSave, onClose }: {
@@ -22,6 +23,10 @@ function UserModal({ initial, onSave, onClose }: {
     is_active: initial?.is_active !== false,
     max_vms: initial?.max_vms ?? 10,
     max_storage_gb: initial?.max_storage_gb ?? 100,
+    can_manage_vms: initial?.can_manage_vms ?? true,
+    can_manage_groups: initial?.can_manage_groups ?? true,
+    can_access_library: initial?.can_access_library ?? true,
+    can_upload_images: initial?.can_upload_images ?? true,
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -100,6 +105,36 @@ function UserModal({ initial, onSave, onClose }: {
             </label>
           </div>
         </div>
+          <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-4">
+            <h3 className="text-sm font-medium text-slate-900 dark:text-white mb-3">Permissions</h3>
+            <div className="space-y-3">
+              {[
+                { key: 'can_manage_vms', label: 'Create & Delete VMs', desc: 'Allow user to create, edit and delete Virtual Machines.' },
+                { key: 'can_manage_groups', label: 'Manage Groups', desc: 'Allow user to create and edit VM folders/groups.' },
+                { key: 'can_access_library', label: 'Access Global Library', desc: 'Allow user to see the read-only ISO library.' },
+                { key: 'can_upload_images', label: 'Upload Images', desc: 'Allow user to upload custom ISOs and floppy images.' },
+              ].map(perm => (
+                <div key={perm.key} className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className={`text-sm font-medium text-slate-700 dark:text-slate-300 ${form.is_admin ? 'opacity-50' : ''}`}>{perm.label}</p>
+                    <p className={`text-xs text-slate-500 mt-0.5 ${form.is_admin ? 'opacity-50' : ''}`}>{perm.desc}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, [perm.key]: !(f as any)[perm.key] }))}
+                    disabled={form.is_admin}
+                    className={clsx(
+                      'flex-shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                      form.is_admin ? 'bg-blue-300 dark:bg-blue-900/50 cursor-not-allowed' : (form as any)[perm.key] ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600',
+                    )}
+                    title={form.is_admin ? 'Admins always have all permissions' : undefined}
+                  >
+                    <span className={clsx('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', (form.is_admin || (form as any)[perm.key]) ? 'translate-x-6' : 'translate-x-1')} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
         {error && <p className="text-sm text-red-500 mt-3">{error}</p>}
         <div className="flex gap-3 mt-6 justify-end">
           <button onClick={onClose} className="btn-secondary">Cancel</button>

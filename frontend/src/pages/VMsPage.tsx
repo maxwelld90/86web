@@ -3,14 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Play, Square, RotateCcw, Pencil, Trash2, Monitor, Loader2,
   FolderPlus, ChevronDown, ChevronRight, LayoutGrid, List,
-  HardDrive, Eye, Network, Settings2, CloudOff,
+  HardDrive, Eye, Network, Settings2, CloudOff, Users, ArrowUp, ArrowDown
 } from 'lucide-react'
-import { vmApi, systemApi, formatBytes } from '../lib/api'
+import { vmApi, systemApi, formatBytes, userApi } from '../lib/api'
 import { VM, VMConfig, VMGroup } from '../types'
 import { useStore } from '../store/useStore'
 import VMConfigModal from '../components/VMConfigModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { clsx } from 'clsx'
+import { X } from 'lucide-react'
 
 type ViewMode = 'grid' | 'list'
 
@@ -29,11 +30,51 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; onEdit: () => void; groupColor?: string; cpuSpeeds?: Record<string, string[]>; onStartError?: (msg: string) => void }) {
+function SharedBadge({ isSharedWithMe, ownerName, sharedCount, asBadge = false }: { isSharedWithMe: boolean, ownerName?: string, sharedCount: number, asBadge?: boolean }) {
+  if (!isSharedWithMe && sharedCount === 0) return null;
+
+  const tooltip = isSharedWithMe
+    ? `Shared from ${ownerName || 'another user'}`
+    : `Shared with ${sharedCount} user${sharedCount !== 1 ? 's' : ''}`;
+
+  const content = (
+    <>
+      <Users className={asBadge ? "w-3 h-3" : "w-3.5 h-3.5"} />
+      {isSharedWithMe 
+        ? <ArrowDown className={asBadge ? "w-2.5 h-2.5 -ml-0.5" : "w-3 h-3 -ml-0.5"} /> 
+        : <ArrowUp className={asBadge ? "w-2.5 h-2.5 -ml-0.5" : "w-3 h-3 -ml-0.5"} />
+      }
+      {asBadge && <span className="ml-0.5">Shared</span>}
+    </>
+  );
+
+  if (asBadge) {
+    return (
+      <span className="flex-shrink-0 flex items-center text-xs text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded cursor-help border border-indigo-100 dark:border-indigo-800/50" title={tooltip}>
+        {content}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center text-indigo-500 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded-md cursor-help transition-colors border border-transparent hover:border-indigo-200 dark:hover:border-indigo-800" title={tooltip}>
+      {content}
+    </span>
+  );
+}
+
+function VMCard({ vm, parentGroup, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; parentGroup?: VMGroup; onEdit: () => void; groupColor?: string; cpuSpeeds?: Record<string, string[]>; onStartError?: (msg: string) => void }) {
   const qc = useQueryClient()
-  const { openVMTab, closeVMTab, addToast, serverOnline } = useStore()
+  const { currentUser, openVMTab, closeVMTab, addToast, serverOnline } = useStore()
+  
+  const effectiveSharedIds = parentGroup?.shared_with_user_ids?.length ? parentGroup.shared_with_user_ids : (vm.shared_with_user_ids || []);
+  const isSharedWithMe = effectiveSharedIds.includes(currentUser?.id || 0) || false;
+  const sharedCount = effectiveSharedIds.length || 0;
+  
+  const isOwnerOrAdmin = currentUser?.is_admin || currentUser?.username === vm.owner_username;
   const isRunning = serverOnline && (vm.status === 'running' || vm.status === 'paused' || vm.status === 'starting')
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const isLockedByOther = !!vm.locked_by_user_id && vm.locked_by_user_id !== currentUser?.id;
 
   const startMut = useMutation({
     mutationFn: () => {
@@ -81,7 +122,10 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
           <h3 className="font-semibold text-slate-900 dark:text-white text-sm truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</h3>
           {vm.description && <p className="text-xs text-slate-400 dark:text-slate-500 truncate mt-0.5" title={vm.description}>{vm.description}</p>}
         </div>
-        <StatusBadge status={vm.status} />
+        <div className="flex flex-col items-end gap-1.5 flex-shrink-0 min-h-[44px]">
+          <StatusBadge status={vm.status} />
+          <SharedBadge isSharedWithMe={isSharedWithMe} ownerName={vm.owner_username} sharedCount={sharedCount} />
+        </div>
       </div>
 
       {/* Specs */}
@@ -110,15 +154,21 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
 
       {/* Actions */}
       <div className="flex items-center gap-2 border-t border-slate-100 dark:border-slate-800 pt-3 mt-auto">
-        {isRunning ? (
+        {isLockedByOther && !currentUser?.is_admin ? (
+          <button disabled className="btn-secondary flex-1 justify-center text-xs py-1.5 opacity-60 cursor-not-allowed border-amber-200 text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400">
+            🔒 In use by {vm.locked_by_username}
+          </button>
+        ) : isRunning ? (
           <>
-            <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className="btn-primary flex-1 justify-center text-xs py-1.5">
-              <Monitor className="w-3.5 h-3.5" />Console
+            <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className={clsx("btn-primary flex-1 justify-center text-xs py-1.5", isLockedByOther && "bg-amber-600 hover:bg-amber-700 text-white border-none")}>
+              <Monitor className="w-3.5 h-3.5" />
+              {isLockedByOther ? `Console (🔒 ${vm.locked_by_username})` : 'Console'}
             </button>
             <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary p-2" title="Stop">
               <Square className="w-3.5 h-3.5" />
             </button>
-            <button onClick={onEdit} className="btn-ghost p-2" title="View settings (read-only while running)">
+            
+            <button onClick={onEdit} disabled={!isOwnerOrAdmin} className="btn-ghost p-2 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : 'View settings'}>
               <Eye className="w-3.5 h-3.5" />
             </button>
           </>
@@ -128,15 +178,12 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
               <Play className="w-3.5 h-3.5" />
               {startMut.isPending || startMut.isSuccess ? 'Starting…' : 'Start'}
             </button>
-            <button onClick={onEdit} disabled={!serverOnline} className="btn-ghost p-2 disabled:opacity-40 disabled:cursor-not-allowed" title={serverOnline ? 'Edit' : 'Server unavailable'}>
+            
+            <button onClick={onEdit} disabled={!serverOnline || !isOwnerOrAdmin} className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : serverOnline ? 'Edit' : 'Server unavailable'}>
               <Pencil className="w-3.5 h-3.5" />
             </button>
-            <button
-              onClick={() => setDeleteConfirm(true)}
-              disabled={!serverOnline}
-              className="btn-ghost p-2 text-red-400 hover:text-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
-              title={serverOnline ? 'Delete' : 'Server unavailable'}
-            >
+            
+            <button onClick={() => setDeleteConfirm(true)} disabled={!serverOnline || !isOwnerOrAdmin} className="btn-ghost p-1.5 text-red-400 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : serverOnline ? undefined : 'Server unavailable'}>
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </>
@@ -155,10 +202,19 @@ function VMCard({ vm, onEdit, groupColor, cpuSpeeds, onStartError }: { vm: VM; o
   )
 }
 
-function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () => void; groupColor?: string; onStartError?: (msg: string) => void }) {
+function VMRow({ vm, parentGroup, onEdit, groupColor, onStartError }: { vm: VM; parentGroup?: VMGroup; onEdit: () => void; groupColor?: string; onStartError?: (msg: string) => void }) {
   const qc = useQueryClient()
-  const { openVMTab, closeVMTab, addToast, serverOnline } = useStore()
+  const { currentUser, openVMTab, closeVMTab, addToast, serverOnline } = useStore()
+  
+  // Vererbung der Rechte:
+  const effectiveSharedIds = parentGroup?.shared_with_user_ids?.length ? parentGroup.shared_with_user_ids : (vm.shared_with_user_ids || []);
+  const isSharedWithMe = effectiveSharedIds.includes(currentUser?.id || 0) || false;
+  const sharedCount = effectiveSharedIds.length || 0;
+
+  const isOwnerOrAdmin = currentUser?.is_admin || currentUser?.username === vm.owner_username;
+  const isLockedByOther = !!vm.locked_by_user_id && vm.locked_by_user_id !== currentUser?.id;
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+
   const startMut = useMutation({
     mutationFn: () => {
       if (!serverOnline) return Promise.reject(new Error('Server is unreachable. Please wait for the connection to be restored.'))
@@ -194,7 +250,11 @@ function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () =>
             <Monitor className={clsx('w-3.5 h-3.5', isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400')} />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</p>
+            {/* VM Name und das SharedBadge nebeneinander */}
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium text-slate-900 dark:text-white truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400" onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })}>{vm.name}</p>
+              <SharedBadge isSharedWithMe={isSharedWithMe} ownerName={vm.owner_username} sharedCount={sharedCount} />
+            </div>
             {vm.description && <p className="text-xs text-slate-400 truncate" title={vm.description}>{vm.description}</p>}
           </div>
         </div>
@@ -206,26 +266,39 @@ function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () =>
       </td>
       <td className="px-5 py-3 w-48">
         <div className="flex items-center gap-1.5">
-          {isRunning ? (
+          {isLockedByOther && !currentUser?.is_admin ? (
+            <button disabled className="btn-secondary flex-1 justify-center text-xs py-1.5 opacity-60 cursor-not-allowed border-amber-200 text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400">
+              🔒 In use by {vm.locked_by_username}
+            </button>
+          ) : isRunning ? (
             <>
-              <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className="btn-primary text-xs py-1 px-2.5">
-                <Monitor className="w-3 h-3" />Console
+              <button onClick={() => openVMTab({ vmId: vm.id, vmUuid: vm.uuid, vmName: vm.name, status: vm.status, group_color: vm.group_color })} className={clsx("btn-primary text-xs py-1 px-2.5", isLockedByOther && "bg-amber-600 hover:bg-amber-700 text-white border-none")}>
+                <Monitor className="w-3 h-3" />
+                {isLockedByOther ? `Console (🔒 ${vm.locked_by_username})` : 'Console'}
               </button>
-              <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary text-xs py-1 px-2 disabled:opacity-60">
+              <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn-secondary text-xs py-1 px-2 disabled:opacity-60" title="Stop">
                 {stopMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
               </button>
-              <button onClick={onEdit} className="btn-ghost p-1.5" title="View settings (read-only while running)">
+              
+              {/* EYE BUTTON (Ausgegraut wenn man nicht der Besitzer/Admin ist) */}
+              <button onClick={onEdit} disabled={!isOwnerOrAdmin} className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : 'View settings (read-only while running)'}>
                 <Eye className="w-3.5 h-3.5" />
               </button>
             </>
           ) : (
             <>
-              <button onClick={() => startMut.mutate()} disabled={startMut.isPending || startMut.isSuccess || !serverOnline} className="btn-success text-xs py-1 px-2.5 disabled:opacity-60">
-                {startMut.isPending || startMut.isSuccess ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+              <button onClick={() => startMut.mutate()} disabled={startMut.isPending || startMut.isSuccess || !serverOnline} className="btn-success flex-1 justify-center text-xs py-1.5 disabled:opacity-60">
+                <Play className="w-3.5 h-3.5" />
                 {startMut.isPending || startMut.isSuccess ? 'Starting…' : 'Start'}
               </button>
-              <button onClick={onEdit} disabled={!serverOnline} className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed" title={serverOnline ? 'Edit' : 'Server unavailable'}><Pencil className="w-3.5 h-3.5" /></button>
-              <button onClick={() => setDeleteConfirm(true)} disabled={!serverOnline} className="btn-ghost p-1.5 text-red-400 disabled:opacity-40 disabled:cursor-not-allowed" title={serverOnline ? undefined : 'Server unavailable'}>
+              
+              {/* EDIT BUTTON (Ausgegraut wenn man nicht der Besitzer/Admin ist) */}
+              <button onClick={onEdit} disabled={!serverOnline || !isOwnerOrAdmin} className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : serverOnline ? 'Edit' : 'Server unavailable'}>
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              
+              {/* DELETE BUTTON (Ausgegraut wenn man nicht der Besitzer/Admin ist) */}
+              <button onClick={() => setDeleteConfirm(true)} disabled={!serverOnline || !isOwnerOrAdmin} className="btn-ghost p-1.5 text-red-400 disabled:opacity-40 disabled:cursor-not-allowed" title={!isOwnerOrAdmin ? 'No permission' : serverOnline ? undefined : 'Server unavailable'}>
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </>
@@ -248,17 +321,26 @@ function VMRow({ vm, onEdit, groupColor, onStartError }: { vm: VM; onEdit: () =>
 
 // ─── Group Create/Edit Modal ───────────────────────────────────────────────────
 
-function GroupModal({ onSave, onClose, initial, hasRunningVMs = false }: {
-  onSave: (name: string, desc: string, color: string, networkEnabled: boolean) => void
+function GroupModal({ onSave, onClose, initial, hasRunningVMs = false, initialSharedWith }: {
+  onSave: (name: string, desc: string, color: string, networkEnabled: boolean, sharedWith: number[]) => void
   onClose: () => void
   initial?: { name: string; description?: string; color: string; network_enabled: boolean }
   hasRunningVMs?: boolean
+  initialSharedWith?: number[]
 }) {
   const [name, setName] = useState(initial?.name || '')
   const [desc, setDesc] = useState(initial?.description || '')
   const [color, setColor] = useState(initial?.color || '#6366f1')
   const [networkEnabled, setNetworkEnabled] = useState(initial?.network_enabled ?? false)
+  const [sharedWith, setSharedWith] = useState<number[]>(initialSharedWith || [])
+  const { currentUser } = useStore()
   const colors = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6']
+
+  const { data: users = [] } = useQuery({ 
+    queryKey: ['users'], 
+    queryFn: userApi.list,
+    enabled: !!currentUser?.is_admin 
+  })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -320,10 +402,45 @@ function GroupModal({ onSave, onClose, initial, hasRunningVMs = false }: {
               </button>
             </div>
           </div>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+            <label className="label mb-2 block">Share with Users</label>
+            {!currentUser?.is_admin ? (
+              <p className="text-xs text-slate-500">Only administrators can share groups.</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {users.filter(u => sharedWith.includes(u.id)).map(u => (
+                    <span key={u.id} className="inline-flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2.5 py-1 rounded-md text-sm font-medium">
+                      {u.username}
+                      <button type="button" onClick={() => setSharedWith(sharedWith.filter(id => id !== u.id))} className="hover:text-red-500 focus:outline-none transition-colors">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                  {sharedWith.length === 0 && <span className="text-sm text-slate-500 italic">Nobody shared with</span>}
+                </div>
+                
+                {users.filter(u => u.id !== currentUser.id && !sharedWith.includes(u.id)).length > 0 && (
+                  <select
+                    className="input w-full text-sm"
+                    value=""
+                    onChange={e => {
+                      if (e.target.value) setSharedWith([...sharedWith, parseInt(e.target.value)])
+                    }}
+                  >
+                    <option value="">+ Add another user...</option>
+                    {users.filter(u => u.id !== currentUser.id && !sharedWith.includes(u.id)).map(u => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex gap-3 mt-6 justify-end">
           <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button onClick={() => { onSave(name, desc, color, networkEnabled); onClose() }} disabled={!name} className="btn-primary">Save</button>
+          <button onClick={() => { onSave(name, desc, color, networkEnabled, sharedWith); onClose() }} disabled={!name} className="btn-primary">Save</button>
         </div>
       </div>
     </div>
@@ -345,6 +462,12 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
   onDeleteGroup: () => void
 }) {
   const groupColor = group.color
+  
+  const { currentUser } = useStore()
+  const isSharedWithMe = group.shared_with_user_ids?.includes(currentUser?.id || 0) || false;
+  const sharedCount = group.shared_with_user_ids?.length || 0;
+  const isGroupOwnerOrAdmin = currentUser?.is_admin || !isSharedWithMe;
+
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
@@ -357,26 +480,34 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
               <Network className="w-3 h-3" />Networked
             </span>
           )}
+          <SharedBadge isSharedWithMe={isSharedWithMe} ownerName={undefined} sharedCount={sharedCount} asBadge={true} />
           <span className="ml-auto text-slate-400 flex-shrink-0">
             {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </span>
         </button>
-        <button onClick={onEditGroup} className="btn-ghost p-1.5 flex-shrink-0" title="Edit group">
+        
+        <button 
+          onClick={onEditGroup} 
+          disabled={!isGroupOwnerOrAdmin} 
+          className="btn-ghost p-1.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed" 
+          title={!isGroupOwnerOrAdmin ? 'No permission' : 'Edit group'}
+        >
           <Settings2 className="w-3.5 h-3.5" />
         </button>
         <button
           onClick={onDeleteGroup}
-          className="btn-ghost p-1.5 text-red-400 hover:text-red-600 flex-shrink-0"
-          title={group.has_running_vms ? 'Stop all VMs before deleting' : 'Delete group'}
-          disabled={group.has_running_vms}
+          disabled={group.has_running_vms || !isGroupOwnerOrAdmin}
+          className="btn-ghost p-1.5 text-red-400 hover:text-red-600 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+          title={!isGroupOwnerOrAdmin ? 'No permission' : group.has_running_vms ? 'Stop all VMs before deleting' : 'Delete group'}
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
+      
       {!collapsed && (
         view === 'grid'
           ? <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {vms.map(vm => <VMCard key={vm.id} vm={vm} groupColor={groupColor} onEdit={() => onEditVM(vm)}cpuSpeeds={cpuSpeeds} onStartError={onStartError} />)}
+              {vms.map(vm => <VMCard key={vm.id} vm={vm} parentGroup={group} groupColor={groupColor} onEdit={() => onEditVM(vm)} cpuSpeeds={cpuSpeeds} onStartError={onStartError} />)}
             </div>
           : <div className="card overflow-hidden">
               <table className="w-full text-sm">
@@ -388,7 +519,7 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {vms.map(vm => <VMRow key={vm.id} vm={vm} groupColor={groupColor} onEdit={() => onEditVM(vm)} onStartError={onStartError} />)}
+                  {vms.map(vm => <VMRow key={vm.id} vm={vm} parentGroup={group} groupColor={groupColor} onEdit={() => onEditVM(vm)} onStartError={onStartError} />)}
                 </tbody>
               </table>
             </div>
@@ -401,7 +532,7 @@ function GroupSection({ group, vms, view, onEditVM, collapsed, onToggle, cpuSpee
 
 export default function VMsPage() {
   const qc = useQueryClient()
-  const { addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
+  const { currentUser, addToast, authConfig, serverOnline, openTabs, updateTabGroupColor } = useStore()
   const [view, setView] = useState<ViewMode>('grid')
   const [showCreateVM, setShowCreateVM] = useState(false)
   const [editVM, setEditVM] = useState<VM | null>(null)
@@ -413,7 +544,7 @@ export default function VMsPage() {
   const [deleteGroupConfirm, setDeleteGroupConfirm] = useState<VMGroup | null>(null)
 
   const { data: vms = [], isLoading } = useQuery({
-    queryKey: ['vms'],
+    queryKey: ['vms', currentUser?.id],
     queryFn: () => vmApi.list(),
     refetchInterval: 5000,
   })
@@ -445,31 +576,31 @@ export default function VMsPage() {
   })
 
   const { data: groups = [] as VMGroup[] } = useQuery({
-    queryKey: ['vm-groups'],
+    queryKey: ['vm-groups', currentUser?.id],
     queryFn: vmApi.listGroups,
   })
 
   const createVMMut = useMutation({
-    mutationFn: (data: { name: string; description?: string; group_id?: number; config: VMConfig }) => vmApi.create(data),
+    mutationFn: (data: { name: string; description?: string; group_id?: number; config: VMConfig; shared_with_user_ids?: number[] }) => vmApi.create(data),
     onSuccess: (vm) => { qc.invalidateQueries({ queryKey: ['vms'] }); addToast(`VM "${vm.name}" created`) },
     onError: (e: any) => addToast(e.message || 'Failed to create VM', 'error'),
   })
 
   const updateVMMut = useMutation({
-    mutationFn: ({ id, ...data }: { id: number; name?: string; description?: string; group_id?: number | null; config?: VMConfig }) =>
+    mutationFn: ({ id, ...data }: { id: number; name?: string; description?: string; group_id?: number | null; config?: VMConfig; shared_with_user_ids?: number[] }) =>
       vmApi.update(id, data),
     onSuccess: (vm) => { qc.invalidateQueries({ queryKey: ['vms'] }); addToast(`VM "${vm.name}" updated`) },
     onError: (e: any) => addToast(e.message || 'Failed to update VM', 'error'),
   })
 
   const createGroupMut = useMutation({
-    mutationFn: (data: { name: string; description?: string; color: string; network_enabled?: boolean }) => vmApi.createGroup(data),
+    mutationFn: (data: { name: string; description?: string; color: string; network_enabled?: boolean; shared_with_user_ids?: number[] }) => vmApi.createGroup(data),
     onSuccess: (g) => { qc.invalidateQueries({ queryKey: ['vm-groups'] }); addToast(`Group "${g.name}" created`) },
     onError: (e: any) => addToast(e.message || 'Failed to create group', 'error'),
   })
 
   const updateGroupMut = useMutation({
-    mutationFn: ({ id, ...data }: { id: number; name?: string; description?: string; color?: string; network_enabled?: boolean }) =>
+    mutationFn: ({ id, ...data }: { id: number; name?: string; description?: string; color?: string; network_enabled?: boolean; shared_with_user_ids?: number[] }) =>
       vmApi.updateGroup(id, data),
     onSuccess: (g) => { qc.invalidateQueries({ queryKey: ['vm-groups'] }); qc.invalidateQueries({ queryKey: ['vms'] }); addToast(`Group "${g.name}" updated`) },
     onError: (e: any) => addToast(e.message || 'Failed to update group', 'error'),
@@ -489,7 +620,7 @@ export default function VMsPage() {
   const grouped: Record<number, VM[]> = {}
   const ungrouped: VM[] = []
   filteredVMs.forEach(vm => {
-    if (vm.group_id) {
+    if (vm.group_id && groups.some(g => g.id === vm.group_id)) {
       if (!grouped[vm.group_id]) grouped[vm.group_id] = []
       grouped[vm.group_id].push(vm)
     } else {
@@ -545,17 +676,20 @@ export default function VMsPage() {
           <button onClick={() => setView('list')} className={clsx('btn-ghost p-2', view === 'list' && 'text-blue-600 dark:text-blue-400')}>
             <List className="w-4 h-4" />
           </button>
-          <button onClick={() => setShowCreateGroup(true)} disabled={!serverOnline} className="btn-secondary disabled:opacity-60" title={!serverOnline ? 'Server unavailable' : undefined}>
-            <FolderPlus className="w-4 h-4" />New Group
-          </button>
-          <button
-            disabled={!serverOnline}
-            onClick={() => atVMQuota ? addToast(`VM quota reached (${userStats!.max_vms} VMs). Delete a VM to create a new one.`, 'error') : setShowCreateVM(true)}
-            className={clsx('btn-primary', (atVMQuota || !serverOnline) && 'opacity-60')}
-            title={!serverOnline ? 'Server unavailable' : atVMQuota ? `Quota reached: ${userStats?.max_vms} VMs` : undefined}
-          >
-            <Plus className="w-4 h-4" />New VM
-          </button>
+        {(currentUser?.is_admin || currentUser?.can_manage_groups) && (
+            <button onClick={() => setShowCreateGroup(true)} disabled={!serverOnline} className="btn-secondary disabled:opacity-60" title={!serverOnline ? 'Server unavailable' : undefined}>
+              <FolderPlus className="w-4 h-4" />New Group
+            </button>
+          )}
+        {(currentUser?.is_admin || currentUser?.can_manage_vms) && (
+            <button
+              disabled={!serverOnline}
+              onClick={() => atVMQuota ? addToast(`VM quota reached.`, 'error') : setShowCreateVM(true)}
+              className={clsx('btn-primary', (atVMQuota || !serverOnline) && 'opacity-60')}
+            >
+              <Plus className="w-4 h-4" />New VM
+            </button>
+          )}
         </div>
       </div>
 
@@ -642,8 +776,8 @@ export default function VMsPage() {
           title="Create Virtual Machine"
           groups={groups}
           onClose={() => setShowCreateVM(false)}
-          onSave={async (name, desc, groupId, config) => {
-            await createVMMut.mutateAsync({ name, description: desc, group_id: groupId ?? undefined, config })
+          onSave={async (name, desc, groupId, config, sharedWith) => {
+            await createVMMut.mutateAsync({ name, description: desc, group_id: groupId ?? undefined, config, shared_with_user_ids: sharedWith })
           }}
         />
       )}
@@ -660,8 +794,9 @@ export default function VMsPage() {
           groups={groups}
           readOnly={editVM.status === 'running' || editVM.status === 'paused' || editVM.status === 'starting'}
           onClose={() => setEditVM(null)}
-          onSave={async (name, desc, groupId, config) => {
-            await updateVMMut.mutateAsync({ id: editVM.id, name, description: desc, group_id: groupId, config })
+          initialSharedWith={editVM.shared_with_user_ids}
+          onSave={async (name, desc, groupId, config, sharedWith) => {
+            await updateVMMut.mutateAsync({ id: editVM.id, name, description: desc, group_id: groupId, config, shared_with_user_ids: sharedWith })
           }}
         />
       )}
@@ -670,8 +805,8 @@ export default function VMsPage() {
       {showCreateGroup && (
         <GroupModal
           onClose={() => setShowCreateGroup(false)}
-          onSave={(name, desc, color, networkEnabled) =>
-            createGroupMut.mutate({ name, description: desc, color, network_enabled: networkEnabled })
+          onSave={(name, desc, color, networkEnabled, sharedWith) =>
+            createGroupMut.mutate({ name, description: desc, color, network_enabled: networkEnabled, shared_with_user_ids: sharedWith })
           }
         />
       )}
@@ -680,10 +815,11 @@ export default function VMsPage() {
       {editGroup && (
         <GroupModal
           initial={{ name: editGroup.name, description: editGroup.description, color: editGroup.color, network_enabled: editGroup.network_enabled }}
+          initialSharedWith={editGroup.shared_with_user_ids}
           hasRunningVMs={editGroup.has_running_vms}
           onClose={() => setEditGroup(null)}
-          onSave={(name, desc, color, networkEnabled) =>
-            updateGroupMut.mutate({ id: editGroup.id, name, description: desc, color, network_enabled: networkEnabled })
+          onSave={(name, desc, color, networkEnabled, sharedWith) =>
+            updateGroupMut.mutate({ id: editGroup.id, name, description: desc, color, network_enabled: networkEnabled, shared_with_user_ids: sharedWith })
           }
         />
       )}

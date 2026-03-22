@@ -98,7 +98,7 @@ export default function Layout() {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'vms', label: 'Virtual Machines', icon: Monitor },
-    { id: 'media', label: 'Media', icon: Library },
+    ...(currentUser?.is_admin || currentUser?.can_access_library ? [{ id: 'media', label: 'Media', icon: Library }] : []),
     { id: 'hardware', label: 'DB Explorer', icon: Cpu },
     ...(currentUser?.is_admin && authConfig?.user_management ? [{ id: 'users', label: 'Users', icon: Users }] : []),
     { id: 'settings', label: 'Settings', icon: Settings },

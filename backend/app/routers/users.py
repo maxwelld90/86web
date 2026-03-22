@@ -59,6 +59,10 @@ async def create_user(
         is_active=body.is_active,
         max_vms=body.max_vms,
         max_storage_gb=body.max_storage_gb,
+        can_manage_vms=body.can_manage_vms,
+        can_manage_groups=body.can_manage_groups,
+        can_access_library=body.can_access_library,
+        can_upload_images=body.can_upload_images,
     )
     db.add(user)
     db.commit()
@@ -115,6 +119,14 @@ async def update_user(
         user.max_storage_gb = body.max_storage_gb
     if body.password:
         user.hashed_password = hash_password(body.password)
+    if body.can_manage_vms is not None:
+        user.can_manage_vms = body.can_manage_vms
+    if body.can_manage_groups is not None:
+        user.can_manage_groups = body.can_manage_groups
+    if body.can_access_library is not None:
+        user.can_access_library = body.can_access_library
+    if body.can_upload_images is not None:
+        user.can_upload_images = body.can_upload_images
 
     db.commit()
     db.refresh(user)

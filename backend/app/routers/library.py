@@ -92,7 +92,10 @@ def _safe_path(base: str, rel: str) -> str:
 
 @router.get("/")
 async def get_library(current_user: User = Depends(get_current_user)):
+    if not current_user.is_admin and not current_user.can_access_library:
+        raise HTTPException(403, "No access to library")
     lib = settings.library_path
+    
     if not os.path.isdir(lib):
         return []
     return _build_tree(lib)
@@ -119,6 +122,9 @@ async def create_images_directory(
     body: MkdirBody,
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     images_dir = _user_images_dir(current_user)
     os.makedirs(images_dir, exist_ok=True)
     full = _safe_path(images_dir, body.path)
@@ -136,6 +142,9 @@ async def upload_image(
     path: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     images_dir = _user_images_dir(current_user)
     target_dir = _safe_path(images_dir, path) if path.strip("/") else images_dir
     os.makedirs(target_dir, exist_ok=True)
@@ -161,6 +170,9 @@ async def delete_image(
     rel_path: str,
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     images_dir = _user_images_dir(current_user)
     full = _safe_path(images_dir, rel_path)
 
@@ -187,6 +199,9 @@ async def move_image(
     body: MoveBody,
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     images_dir = _user_images_dir(current_user)
     src_full = _safe_path(images_dir, body.src)
     dst_full = _safe_path(images_dir, body.dst)

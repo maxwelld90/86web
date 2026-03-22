@@ -36,6 +36,9 @@ async def upload_shared_media(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     """Upload a file to the user's shared media pool."""
     mdir = _shared_media_dir(current_user.id)
     os.makedirs(mdir, exist_ok=True)
@@ -54,6 +57,9 @@ async def delete_shared_media(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin and not current_user.can_upload_images:
+        raise HTTPException(403, "No permission to upload or manage images")
+    
     """Delete a file from the user's shared media pool."""
     mdir = _shared_media_dir(current_user.id)
     safe_name = os.path.basename(filename)
