@@ -706,7 +706,7 @@ def _write_86box_config(vm: VM, vm_dir: str, config_override: dict | None = None
                 opt(f"cdrom_{n}_ide_channel", channel)
             fn = cfg.get(f"cdrom_{n}_fn", "")
             if fn:
-                opt(f"cdrom_{n}_image_path", fn)
+                opt(f"cdrom_{n}_fn", fn)
 
     # ── [Ports (COM & LPT)] ───────────────────────────────────────────────────
     section("Ports (COM & LPT)")
